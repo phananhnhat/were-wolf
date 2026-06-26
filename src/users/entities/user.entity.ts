@@ -20,6 +20,12 @@ export class User {
   @Column({ unique: true })
   email: string;
 
+  @Column({ type: 'varchar', nullable: true })
+  address: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  gender: string | null;
+
   @Exclude()
   @Column()
   password: string;
