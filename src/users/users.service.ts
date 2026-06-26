@@ -45,7 +45,4 @@ export class UsersService {
     return this.repo.remove(user);
   }
 
-  async updateRefreshToken(id: number, token: string | null): Promise<void> {
-    await this.repo.update(id, { refreshToken: token });
-  }
 }

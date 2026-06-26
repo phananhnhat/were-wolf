@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "files": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "D:were-wolf"
+      ],
+      "env": {}
+    }
+  }
+}

@@ -4,78 +4,62 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
-Use `npm` (pnpm workspace is present but node_modules are managed via npm in practice).
-
 ```bash
-npm install               # install dependencies
-npm run start:dev         # run in watch mode (hot reload)
-npm run build             # compile to dist/
-npm run start:prod        # run compiled output
-
-npm run lint              # ESLint with auto-fix
-npm run format            # Prettier
-
-npm run test                                    # unit tests (jest, rootDir: src)
-npm run test:watch                              # watch mode
-npm run test:cov                                # coverage report
-npm run test:e2e                                # e2e tests (test/jest-e2e.json)
-npm run test -- --testPathPattern=auth          # run a single spec file
+pnpm install          # install dependencies
+pnpm run start:dev    # run with watch mode (development)
+pnpm run build        # compile to dist/
+pnpm run start:prod   # run compiled output
+pnpm run lint         # ESLint with auto-fix
+pnpm run format       # Prettier format
+pnpm run test         # unit tests (jest, rootDir: src/)
+pnpm run test:e2e     # e2e tests (test/jest-e2e.json)
+pnpm run test:cov     # coverage report
 ```
 
-Server starts on `PORT` env var, defaulting to **3000**.
-
-## Environment
-
-Copy `.env.example` → `.env` and fill in values before starting:
-
-```
-DATABASE_URL=postgresql://postgres:password@localhost:5432/werewolf
-JWT_ACCESS_SECRET=...
-JWT_REFRESH_SECRET=...
-JWT_ACCESS_EXPIRES_IN=15m    # optional, default 15m
-JWT_REFRESH_EXPIRES_IN=7d    # optional, default 7d
+Run a single test file:
+```bash
+pnpm run test -- --testPathPattern=auth
 ```
 
-PostgreSQL is expected via Docker. `synchronize: true` auto-creates/alters tables in development (disable in production).
+## Environment Variables
+
+Required at startup (loaded via `@nestjs/config`):
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection URL |
+| `JWT_ACCESS_SECRET` | Secret for signing access tokens |
+| `JWT_REFRESH_SECRET` | Secret for signing refresh tokens |
+| `JWT_ACCESS_EXPIRES_IN` | Access token TTL (default: `15m`) |
+| `JWT_REFRESH_EXPIRES_IN` | Refresh token TTL (default: `7d`) |
+| `PORT` | HTTP port (default: `3000`) |
 
 ## Architecture
 
-NestJS 11 REST API with TypeScript and PostgreSQL (TypeORM).
+### Auth flow (dual-token with refresh rotation)
 
-### Module structure
+- `JwtAuthGuard` is registered as a **global guard** via `APP_GUARD` in `AppModule`. Every route requires a valid access token by default.
+- Mark public routes with `@Public()` (`src/auth/decorators/public.decorator.ts`) to bypass the guard.
+- The refresh endpoint (`POST /auth/refresh`) uses `@Public()` + `@UseGuards(JwtRefreshGuard)` — it expects a **refresh token** in the `Authorization: Bearer` header instead of an access token.
+- Refresh tokens are bcrypt-hashed before being stored in the `users.refreshToken` column. On each refresh, the old token is validated by `bcrypt.compare` against the stored hash, then a new pair is issued and the hash is updated.
+- On logout or password change, `refreshToken` is set to `null`, invalidating the refresh token server-side.
 
-```
-src/
-  auth/
-    strategies/jwt.strategy.ts          # validates accessToken, sets req.user
-    strategies/jwt-refresh.strategy.ts  # validates refreshToken + checks hashed copy in DB
-    guards/jwt-auth.guard.ts            # global guard — skips routes marked @Public()
-    guards/jwt-refresh.guard.ts         # applied only on POST /auth/refresh
-    decorators/public.decorator.ts      # @Public() — opt-out from global JWT guard
-    decorators/current-user.decorator.ts # @CurrentUser() — extracts req.user
-    dto/{register,login,change-password}.dto.ts
-    auth.service.ts                     # register, login, logout, refresh, changePassword
-    auth.controller.ts                  # POST /auth/{register,login,refresh,logout,change-password}
-  users/
-    entities/user.entity.ts             # TypeORM entity; password + refreshToken @Exclude()'d
-    users.service.ts                    # TypeORM repository CRUD + findByUsername/Email + updateRefreshToken
-    users.module.ts                     # exports UsersService (consumed by AuthModule)
-  groups/                               # in-memory CRUD (no DB), same pattern as users
-  app.module.ts                         # registers ConfigModule, TypeOrmModule, global JwtAuthGuard
-  main.ts                               # ValidationPipe (whitelist) + ClassSerializerInterceptor
-```
+### Global interceptors / pipes
 
-### Auth flow
+- `ClassSerializerInterceptor` is global — `@Exclude()` on entity fields (e.g., `password`, `refreshToken`) is respected automatically in all responses.
+- `ValidationPipe({ whitelist: true })` is global — DTOs strip unknown properties before they reach controllers.
 
-- **Register / Login** → `issueTokens()` signs both tokens, stores bcrypt-hashed refreshToken in `users.refresh_token`; returns `{ accessToken, refreshToken }`.
-- **Protected routes** → send `Authorization: Bearer <accessToken>`. `JwtAuthGuard` is applied globally; use `@Public()` to bypass.
-- **Refresh** → send `Authorization: Bearer <refreshToken>` to `POST /auth/refresh`. `JwtRefreshStrategy` compares the raw token against the hashed DB copy (token rotation on every refresh).
-- **Logout** → nulls `refreshToken` in DB, invalidating the refresh session.
-- **Change password** → verifies current password, re-hashes new one, invalidates all refresh sessions.
+### Database
 
-### Key conventions
+- TypeORM with PostgreSQL. `synchronize: true` is currently enabled — **disable before deploying to production**.
+- Only `User` is registered as a TypeORM entity in `AppModule`. The `groups` module currently uses a plain TypeScript interface (`Group`) with no database backing — it is a stub.
 
-- `@Exclude()` on `User.password` and `User.refreshToken` — `ClassSerializerInterceptor` strips them from all responses automatically.
-- DTOs use `class-validator` decorators; `ValidationPipe({ whitelist: true })` strips unknown fields globally.
-- `noImplicitAny` is **disabled** in `tsconfig.json`.
-- `expiresIn` in `jwtService.signAsync` requires a cast to `never` due to the `StringValue` branded type in `@nestjs/jwt` v11+.
+### Module boundaries
+
+- `UsersModule` exports `UsersService` and `TypeOrmModule.forFeature([User])` for use by `AuthModule`.
+- `AuthModule` imports `UsersModule` and registers both JWT strategies (`jwt` and `jwt-refresh`) as Passport strategies.
+- `GroupsModule` is self-contained and has no database integration yet.
+
+### `@CurrentUser()` decorator
+
+`src/auth/decorators/current-user.decorator.ts` — extracts the authenticated user (populated by Passport into `req.user`) as a method parameter. Available on any non-public route.

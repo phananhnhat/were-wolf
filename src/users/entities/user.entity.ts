@@ -24,10 +24,6 @@ export class User {
   @Column()
   password: string;
 
-  @Exclude()
-  @Column({ nullable: true, type: 'text' })
-  refreshToken: string | null;
-
   @CreateDateColumn()
   createdAt: Date;
 }
