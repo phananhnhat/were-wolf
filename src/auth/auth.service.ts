@@ -37,9 +37,9 @@ export class AuthService {
     }
 
     const password = await bcryptjs.hash(dto.password, 10);
-    const user = await this.usersService.create({ ...dto, password });
+    await this.usersService.create({ ...dto, password });
 
-    return this.issueTokens(user);
+    return { message: 'Registered successfully' };
   }
 
   async login(dto: LoginDto) {
