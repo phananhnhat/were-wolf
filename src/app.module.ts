@@ -7,9 +7,12 @@ import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
 import { GroupsModule } from './groups/groups.module';
 import { AuthModule } from './auth/auth.module';
+import { RoomsModule } from './rooms/rooms.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { User } from './users/entities/user.entity';
 import { UserSession } from './auth/entities/user-session.entity';
+import { Room } from './rooms/entities/room.entity';
+import { RoomMember } from './rooms/entities/room-member.entity';
 
 @Module({
   imports: [
@@ -32,7 +35,7 @@ import { UserSession } from './auth/entities/user-session.entity';
         // config.getOrThrow() đọc từ process.env.DATABASE_URL
         // Nếu biến không tồn tại → throw lỗi ngay lúc khởi động, không chờ đến lúc dùng
         url: config.getOrThrow<string>('DATABASE_URL'),
-        entities: [User, UserSession],
+        entities: [User, UserSession, Room, RoomMember],
         synchronize: true, // tắt khi lên production
       }),
     }),
@@ -71,6 +74,7 @@ import { UserSession } from './auth/entities/user-session.entity';
     UsersModule,
     GroupsModule,
     AuthModule,
+    RoomsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: JwtAuthGuard }],

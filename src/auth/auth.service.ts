@@ -24,6 +24,8 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    @InjectRepository(User)
+    private readonly usersRepo: Repository<User>,
     @InjectRepository(UserSession)
     private readonly sessionsRepo: Repository<UserSession>,
   ) {}
@@ -37,7 +39,7 @@ export class AuthService {
     }
 
     const password = await bcryptjs.hash(dto.password, 10);
-    await this.usersService.create({ ...dto, password });
+    await this.usersRepo.save(this.usersRepo.create({ ...dto, password }));
 
     return { message: 'Registered successfully' };
   }
@@ -81,8 +83,8 @@ export class AuthService {
     const valid = await bcryptjs.compare(dto.currentPassword, user.password);
     if (!valid) throw new ForbiddenException('Current password is incorrect');
 
-    const password = await bcryptjs.hash(dto.newPassword, 10);
-    await this.usersService.updatePassword(userId, { password });
+    user.password = await bcryptjs.hash(dto.newPassword, 10);
+    await this.usersRepo.save(user);
     await this.sessionsRepo.delete({ userId });
 
     return { message: 'Password changed successfully' };
