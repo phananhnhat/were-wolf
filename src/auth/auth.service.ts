@@ -82,7 +82,7 @@ export class AuthService {
     if (!valid) throw new ForbiddenException('Current password is incorrect');
 
     const password = await bcryptjs.hash(dto.newPassword, 10);
-    await this.usersService.update(userId, { password });
+    await this.usersService.updatePassword(userId, { password });
     await this.sessionsRepo.delete({ userId });
 
     return { message: 'Password changed successfully' };

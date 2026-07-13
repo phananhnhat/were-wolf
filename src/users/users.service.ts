@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { UpdatePasswordDto } from './dto/update-password.dto';
 
 @Injectable()
 export class UsersService {
@@ -40,9 +41,14 @@ export class UsersService {
     return this.repo.save(user);
   }
 
+  async updatePassword(id: number, dto: UpdatePasswordDto): Promise<User> {
+    const user = await this.findOne(id);
+    Object.assign(user, dto);
+    return this.repo.save(user);
+  }
+
   async remove(id: number): Promise<User> {
     const user = await this.findOne(id);
     return this.repo.remove(user);
   }
-
 }
