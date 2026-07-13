@@ -40,7 +40,7 @@ Ràng buộc:
 ### 1.3. Quan hệ module
 
 - `RoomsModule` import `UsersModule` (để lấy thông tin user hiển thị trong danh sách phòng) giống cách `AuthModule` đang làm.
-- `RoomsModule` export `RoomsService` để `GameModule` (tương lai) gọi `startGame()` / `finishGame()`.
+- `RoomsModule` và `GameModule` (tương lai) **không** import lẫn nhau — phối hợp qua event (`EventEmitter2`), xem thiết kế chi tiết ở [game.md](./game.md).
 
 ---
 
@@ -74,7 +74,7 @@ Ràng buộc:
 | `POST` | `/rooms/:id/start` | Access token | Host | Bắt đầu ván (`WAITING` → `PLAYING`) |
 | `DELETE` | `/rooms/:id` | Access token | Host | Xoá phòng, kick toàn bộ member |
 
-`POST /rooms/:id/finish` **không** phải REST endpoint public — đây là method nội bộ `RoomsService.finishGame(roomId)` được `GameModule` gọi trực tiếp (dependency injection) khi ván kết thúc, không cần expose qua HTTP.
+`POST /rooms/:id/finish` **không** phải REST endpoint public — đây là method nội bộ `RoomsService.finishGame(roomId)`, được gọi bởi listener nội bộ của `RoomsModule` khi nhận event `game.finished` từ `GameModule` (xem [game.md](./game.md)), không cần expose qua HTTP và không có dependency trực tiếp giữa 2 module.
 
 ---
 
@@ -126,21 +126,22 @@ Ràng buộc:
 2. `status` phải đang `WAITING`, nếu không → `ConflictException`.
 3. Số member hiện tại phải **đúng bằng** `room.maxPlayers` — thiếu người → `BadRequestException` ("Cần đủ N người để bắt đầu").
 4. Set `status = PLAYING`.
-5. Gọi sang `GameModule` (ví dụ `GameService.createGameForRoom(roomId, memberIds, roleConfig)`) để khởi tạo state ván chơi, chia vai trò theo `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` (định nghĩa tĩnh trong code, xem mục 1.1) — nằm ngoài phạm vi tài liệu này.
+5. Emit event `room.started { roomId, maxPlayers, memberIds }` để `GameModule` khởi tạo state ván chơi, chia vai trò theo `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` — chi tiết luồng và lý do dùng event thay vì gọi thẳng xem [game.md](./game.md).
 6. Broadcast `room:started`.
 
 ### 4.6. Kết thúc ván (Finish)
 
-1. `GameModule` gọi `RoomsService.finishGame(roomId)` khi ván kết thúc (có người thắng, hoặc bị huỷ giữa chừng).
-2. Set `status = WAITING`. Member giữ nguyên, host giữ nguyên.
+1. `GameModule` emit event `game.finished { roomId }` khi ván kết thúc (có người thắng, hoặc bị huỷ giữa chừng).
+2. `RoomsModule` lắng nghe event này, tự gọi nội bộ `RoomsService.finishGame(roomId)`. Set `status = WAITING`. Member giữ nguyên, host giữ nguyên.
 3. Broadcast `room:finished` để client quay lại màn hình phòng chờ.
 
 ### 4.7. Xoá phòng
 
 1. Chỉ host mới gọi được.
-2. Cho phép xoá ở cả `WAITING` lẫn `PLAYING` (chủ phòng huỷ ván giữa chừng) — nếu đang `PLAYING`, gọi `GameModule` để huỷ state ván trước khi xoá phòng.
+2. Cho phép xoá ở cả `WAITING` lẫn `PLAYING` (chủ phòng huỷ ván giữa chừng).
 3. Xoá toàn bộ `RoomMember` (cascade), xoá `Room`.
-4. Broadcast `room:deleted` tới tất cả member để client tự động thoát ra màn hình lobby.
+4. Emit event `room.deleted { roomId }` — nếu đang `PLAYING`, `GameModule` lắng nghe event này để huỷ (`CANCELLED`) state ván tương ứng, xem [game.md §6](./game.md).
+5. Broadcast `room:deleted` tới tất cả member để client tự động thoát ra màn hình lobby.
 
 ---
 

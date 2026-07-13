@@ -49,7 +49,7 @@ Tài liệu này mô tả **luật chơi** cơ bản của Ma Sói làm cơ sở
 | Người điên (Tanner/Fool) | Thắng nếu chính mình bị dân làng treo cổ |
 | Kẻ ăn thịt người (Cannibal, tuỳ biến thể) | Thắng theo điều kiện riêng, không phe nào |
 
-> Vai trò cụ thể của mỗi ván được cấu hình qua cột `game_modes.roleConfig` (xem [room.md §1.1](./room.md)), ví dụ `{"werewolf":1,"villager":4,"seer":1}`.
+> Vai trò cụ thể của mỗi ván được xác định qua `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` (định nghĩa tĩnh trong code, xem mục 6 bên dưới), ví dụ `{"werewolf":1,"villager":4,"seer":1}` với phòng 6 người.
 
 ---
 
@@ -109,6 +109,6 @@ Ván chơi dừng ngay khi một điều kiện thắng được thoả mãn ở
 
 ## 7. Ghi chú cho `GameModule` (ngoài phạm vi tài liệu này)
 
-- Việc chia vai ngẫu nhiên theo `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` khi phòng `start()` thuộc về `GameModule` (xem [room.md §4.5](./room.md)).
+- Việc chia vai ngẫu nhiên theo `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` khi phòng `start()` thuộc về `GameModule`, kích hoạt qua event `room.started` (xem [game.md](./game.md)).
 - Trạng thái "còn sống/đã chết" của từng người chơi trong ván, lượt hiện tại (đêm/ngày, số thứ tự), lịch sử bỏ phiếu... là state riêng của `GameModule`, không thuộc `RoomsModule`.
 - Xử lý "rời phòng giữa ván" (rớt mạng) được đánh dấu "disconnected" ở tầng `GameModule`, không xoá khỏi ván đang chơi (xem [room.md §4.3](./room.md)).

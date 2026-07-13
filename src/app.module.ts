@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -8,11 +9,14 @@ import { UsersModule } from './users/users.module';
 import { GroupsModule } from './groups/groups.module';
 import { AuthModule } from './auth/auth.module';
 import { RoomsModule } from './rooms/rooms.module';
+import { GameModule } from './game/game.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { User } from './users/entities/user.entity';
 import { UserSession } from './auth/entities/user-session.entity';
 import { Room } from './rooms/entities/room.entity';
 import { RoomMember } from './rooms/entities/room-member.entity';
+import { Game } from './game/entities/game.entity';
+import { GamePlayer } from './game/entities/game-player.entity';
 
 @Module({
   imports: [
@@ -21,6 +25,10 @@ import { RoomMember } from './rooms/entities/room-member.entity';
     // isGlobal: true → không cần import ConfigModule lại ở từng module con
     //                   ConfigService có thể inject ở bất kỳ đâu
     ConfigModule.forRoot({ isGlobal: true }),
+
+    // Global — RoomsModule/GameModule không import lẫn nhau, phối hợp qua event
+    // (EventEmitter2.emit / @OnEvent) để tránh circular dependency, xem docs/game.md §2
+    EventEmitterModule.forRoot(),
 
     // forRootAsync thay vì forRoot vì cần inject ConfigService để đọc DATABASE_URL
     // (ConfigService chỉ available sau khi ConfigModule khởi động xong)
@@ -35,7 +43,7 @@ import { RoomMember } from './rooms/entities/room-member.entity';
         // config.getOrThrow() đọc từ process.env.DATABASE_URL
         // Nếu biến không tồn tại → throw lỗi ngay lúc khởi động, không chờ đến lúc dùng
         url: config.getOrThrow<string>('DATABASE_URL'),
-        entities: [User, UserSession, Room, RoomMember],
+        entities: [User, UserSession, Room, RoomMember, Game, GamePlayer],
         synchronize: true, // tắt khi lên production
       }),
     }),
@@ -75,6 +83,7 @@ import { RoomMember } from './rooms/entities/room-member.entity';
     GroupsModule,
     AuthModule,
     RoomsModule,
+    GameModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: JwtAuthGuard }],

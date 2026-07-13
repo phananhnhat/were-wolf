@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository } from 'typeorm';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Room, RoomStatus } from './entities/room.entity';
 import { RoomMember } from './entities/room-member.entity';
 import { CreateRoomDto } from './dto/create-room.dto';
@@ -30,6 +31,7 @@ export class RoomsService {
     private readonly roomsRepo: Repository<Room>,
     @InjectRepository(RoomMember)
     private readonly membersRepo: Repository<RoomMember>,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async findWaitingRooms(page = DEFAULT_PAGE, limit = DEFAULT_LIMIT) {
@@ -172,8 +174,8 @@ export class RoomsService {
       throw new ConflictException('Phòng không ở trạng thái chờ');
     }
 
-    const memberCount = await this.membersRepo.count({ where: { roomId } });
-    if (memberCount !== room.maxPlayers) {
+    const members = await this.membersRepo.find({ where: { roomId } });
+    if (members.length !== room.maxPlayers) {
       throw new BadRequestException(
         `Cần đủ ${room.maxPlayers} người để bắt đầu`,
       );
@@ -181,8 +183,15 @@ export class RoomsService {
 
     room.status = RoomStatus.PLAYING;
     await this.roomsRepo.save(room);
-    // Khởi tạo state ván chơi (chia vai theo ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers])
-    // thuộc về GameModule (GameService.createGameForRoom) — ngoài phạm vi RoomsModule.
+
+    // GameModule lắng nghe event này để tạo ván + chia vai — không import trực tiếp
+    // để tránh circular dependency, xem docs/game.md §2.
+    this.eventEmitter.emit('room.started', {
+      roomId: room.id,
+      maxPlayers: room.maxPlayers,
+      memberIds: members.map((m) => m.userId),
+    });
+
     return room;
   }
 
@@ -204,7 +213,23 @@ export class RoomsService {
     }
 
     await this.roomsRepo.remove(room); // cascade xóa room_members
+    // GameModule lắng nghe để huỷ (CANCELLED) ván đang chạy của phòng này, nếu có
+    this.eventEmitter.emit('room.deleted', { roomId });
     return { message: 'Đã xóa phòng' };
+  }
+
+  @OnEvent('game.finished')
+  async handleGameFinished(payload: { roomId: number }): Promise<void> {
+    await this.finishGame(payload.roomId);
+  }
+
+  @OnEvent('game.start_failed')
+  async handleGameStartFailed(payload: { roomId: number }): Promise<void> {
+    const room = await this.roomsRepo.findOneBy({ id: payload.roomId });
+    if (room && room.status === RoomStatus.PLAYING) {
+      room.status = RoomStatus.WAITING;
+      await this.roomsRepo.save(room);
+    }
   }
 
   private async saveRoomWithUniqueCode(
