@@ -67,7 +67,7 @@ Ràng buộc:
 | Method | Path | Auth | Ai được gọi | Mô tả |
 |---|---|---|---|---|
 | `POST` | `/rooms` | Access token | Bất kỳ user chưa ở phòng nào | Tạo phòng, tự động join làm host |
-| `GET` | `/rooms` | Access token | Bất kỳ | Danh sách phòng đang `WAITING` (lobby browser) |
+| `GET` | `/rooms?page=&limit=` | Access token | Bất kỳ | Danh sách phòng đang `WAITING` (lobby browser), có phân trang |
 | `GET` | `/rooms/:id` | Access token | Member của phòng | Chi tiết phòng + danh sách member |
 | `POST` | `/rooms/join` | Access token | User chưa ở phòng nào | Join bằng `code` |
 | `POST` | `/rooms/:id/leave` | Access token | Member của phòng | Rời phòng |
@@ -79,6 +79,13 @@ Ràng buộc:
 ---
 
 ## 4. Luồng nghiệp vụ
+
+### 4.0. Danh sách phòng (phân trang)
+
+1. Client gửi query `page` (mặc định `1`) và `limit` (mặc định `10`, tối đa `50` — chặn cứng ở service tránh client xin quá nhiều record 1 lần).
+2. Chỉ trả các phòng `status = WAITING`, sắp xếp `createdAt DESC` (phòng mới nhất lên đầu).
+3. Response dạng `{ items, total, page, limit, totalPages }`.
+4. `page`/`limit` không hợp lệ (không phải số) → validate lỗi 400 ở `ListRoomsDto` (`@IsNumberString`); giá trị hợp lệ nhưng vô lý (VD `page=0`, `limit=-5`) → service tự fallback về mặc định thay vì lỗi, tránh vỡ luồng client.
 
 ### 4.1. Tạo phòng
 

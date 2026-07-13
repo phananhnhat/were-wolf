@@ -8,10 +8,12 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
 } from '@nestjs/common';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { JoinRoomDto } from './dto/join-room.dto';
+import { ListRoomsDto } from './dto/list-rooms.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 
@@ -20,8 +22,11 @@ export class RoomsController {
   constructor(private readonly roomsService: RoomsService) {}
 
   @Get()
-  findAll() {
-    return this.roomsService.findWaitingRooms();
+  findAll(@Query() query: ListRoomsDto) {
+    return this.roomsService.findWaitingRooms(
+      query.page ? Number(query.page) : undefined,
+      query.limit ? Number(query.limit) : undefined,
+    );
   }
 
   @Get(':id')

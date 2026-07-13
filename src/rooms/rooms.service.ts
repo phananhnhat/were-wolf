@@ -18,6 +18,10 @@ const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const CODE_LENGTH = 6;
 const MAX_CODE_ATTEMPTS = 5;
 
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 50;
+
 @Injectable()
 export class RoomsService {
   constructor(
@@ -28,8 +32,28 @@ export class RoomsService {
     private readonly membersRepo: Repository<RoomMember>,
   ) {}
 
-  findWaitingRooms(): Promise<Room[]> {
-    return this.roomsRepo.find({ where: { status: RoomStatus.WAITING } });
+  async findWaitingRooms(page = DEFAULT_PAGE, limit = DEFAULT_LIMIT) {
+    const currentPage =
+      Number.isInteger(page) && page > 0 ? page : DEFAULT_PAGE;
+    const pageSize =
+      Number.isInteger(limit) && limit > 0
+        ? Math.min(limit, MAX_LIMIT)
+        : DEFAULT_LIMIT;
+
+    const [items, total] = await this.roomsRepo.findAndCount({
+      where: { status: RoomStatus.WAITING },
+      order: { createdAt: 'DESC' },
+      skip: (currentPage - 1) * pageSize,
+      take: pageSize,
+    });
+
+    return {
+      items,
+      total,
+      page: currentPage,
+      limit: pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   async findRoomDetail(roomId: number, userId: number) {
