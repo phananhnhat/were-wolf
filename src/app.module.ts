@@ -17,6 +17,7 @@ import { Room } from './rooms/entities/room.entity';
 import { RoomMember } from './rooms/entities/room-member.entity';
 import { Game } from './game/entities/game.entity';
 import { GamePlayer } from './game/entities/game-player.entity';
+import { GameVote } from './game/entities/game-vote.entity';
 
 @Module({
   imports: [
@@ -43,7 +44,15 @@ import { GamePlayer } from './game/entities/game-player.entity';
         // config.getOrThrow() đọc từ process.env.DATABASE_URL
         // Nếu biến không tồn tại → throw lỗi ngay lúc khởi động, không chờ đến lúc dùng
         url: config.getOrThrow<string>('DATABASE_URL'),
-        entities: [User, UserSession, Room, RoomMember, Game, GamePlayer],
+        entities: [
+          User,
+          UserSession,
+          Room,
+          RoomMember,
+          Game,
+          GamePlayer,
+          GameVote,
+        ],
         synchronize: true, // tắt khi lên production
       }),
     }),

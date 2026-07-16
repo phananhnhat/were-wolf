@@ -119,16 +119,40 @@ Vai trò là bí mật riêng của từng người chơi (trừ phe Sói biết
 
 ---
 
-## 9. Endpoint mô phỏng (placeholder, thay chỗ rule engine chưa xây)
+## 9. Rule engine bỏ phiếu (đêm/ngày)
 
-Chưa có night/day action thật, nên tạm thời expose 2 endpoint để demo luồng "tạo ván → đạt điều kiện thắng → kết thúc ván":
+`POST /games/:gameId/kill/:userId` (placeholder) đã được thay bằng rule engine thật, tự chạy bằng timer trong `GameService` (không dùng queue/`@nestjs/schedule` — `setTimeout` trong bộ nhớ process, key theo `gameId`). Chưa có WebSocket nên client tự poll `GET /games/room/:roomId` để lấy `phase`/`phaseEndsAt`/kết quả mới nhất.
+
+### 9.1. Pha và thời lượng
+
+`Game.phase` có 3 giá trị: `NIGHT` → `DAY` (thảo luận) → `DAY_VOTE` (bỏ phiếu) → quay lại `NIGHT` (tăng `dayNumber`). `game-rules.md` §4 mô tả "Ban ngày" là 1 pha gộp thảo luận + vote; `DAY`/`DAY_VOTE` là 2 pha kỹ thuật tách ra để rule engine biết lúc nào mở cửa nhận phiếu.
+
+| Pha | Thời lượng | Ai được vote | Kết thúc pha |
+|---|---|---|---|
+| `NIGHT` | 2 phút | Sói còn sống, chọn nạn nhân | Kiểm phiếu Sói → cắn chết người nhiều phiếu nhất (không công khai), rồi chuyển `DAY` |
+| `DAY` | 5 phút | Không nhận phiếu (chỉ thảo luận) | Hết giờ tự chuyển `DAY_VOTE`, không kiểm phiếu gì |
+| `DAY_VOTE` | 1 phút | Toàn bộ người còn sống, chọn người treo cổ | Kiểm phiếu cả làng → treo cổ người nhiều phiếu nhất, rồi kiểm tra thắng thua (mục 5), nếu chưa xong thì `dayNumber += 1` và quay lại `NIGHT` |
+
+**Hòa phiếu (không có ai có số phiếu cao nhất duy nhất) → không giết/không treo cổ ai** — áp dụng như nhau cho cả `NIGHT` và `DAY_VOTE`.
+
+### 9.2. Endpoint
 
 | Method | Path | Mô tả |
 |---|---|---|
-| `GET` | `/games/room/:roomId` | Lấy trạng thái ván hiện tại/gần nhất của phòng, áp bộ lọc ẩn vai trò ở mục 7 |
-| `POST` | `/games/:gameId/kill/:userId` | Đánh dấu 1 người chơi chết (`isAlive = false`), sau đó tự kiểm tra điều kiện thắng (mục 5) — nếu thoả thì kết thúc ván ngay |
+| `GET` | `/games/room/:roomId` | Trạng thái ván hiện tại (kèm `phase`, `dayNumber`, `phaseEndsAt`), áp bộ lọc ẩn vai trò ở mục 7 |
+| `POST` | `/games/:gameId/vote` | Body `{ targetUserId }`. `NIGHT`: chỉ Sói còn sống gọi được. `DAY_VOTE`: ai còn sống cũng gọi được. Gọi lại nhiều lần = đổi phiếu (không cộng dồn) |
+| `GET` | `/games/:gameId/votes` | Kiểm phiếu hiện tại của lượt đang mở. `NIGHT` chỉ Sói xem được (bàn bạc kín, thấy phiếu đổi real-time qua polling); `DAY_VOTE` ai cũng xem được (công khai) |
 
-`killPlayer()` chỉ tính 2 điều kiện thắng dựa trên số người còn sống (không còn Sói / Sói ≥ Dân — xem [game-rules.md §5](./game-rules.md)); điều kiện thắng của "Người điên" (phụ thuộc nguyên nhân chết — bị treo cổ) cần rule engine đêm/ngày nên chưa xử lý. Route `kill` sẽ được thay thế bởi hành động thật (Sói cắn, treo cổ, thuốc độc...) khi rule engine được xây dựng.
+Bảng `game_votes` lưu 1 dòng/người/lượt (`UNIQUE(gameId, phase, dayNumber, voterId)`) — đổi phiếu là `UPDATE`, không tạo dòng mới, nên kiểm phiếu luôn tính đúng phiếu gần nhất.
+
+### 9.3. Điều kiện thắng đã xử lý đầy đủ
+
+Khác với placeholder cũ, rule engine giờ xử lý luôn điều kiện thắng của "Người điên" (mục [game-rules.md §5](./game-rules.md)): nếu người bị treo cổ trong `DAY_VOTE` có vai trò thuộc `THIRD_PARTY_ROLES`, ván kết thúc ngay với `winner = THIRD_PARTY` (đơn giản hoá — không xử lý trường hợp nhiều phe cùng thắng độc lập).
+
+### 9.4. Giới hạn hiện tại
+
+- Timer chạy trong bộ nhớ process (`Map<gameId, Timeout>` trong `GameService`) — server restart giữa ván sẽ làm ván đó không tự chuyển pha nữa (chưa có persistence/queue cho timer).
+- Chưa có WebSocket broadcast — client phải tự poll để biết pha đổi/ai bị giết. Thiết kế gateway tương lai xem [room.md §6](./room.md).
 
 ---
 

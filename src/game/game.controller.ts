@@ -1,4 +1,5 @@
 import {
+  Body,
   Controller,
   Get,
   HttpCode,
@@ -8,6 +9,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { GameService } from './game.service';
+import { CastVoteDto } from './dto/cast-vote.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 
@@ -23,14 +25,24 @@ export class GameController {
     return this.gameService.getGameStateForUser(roomId, user.id);
   }
 
-  // Endpoint mô phỏng — đứng thay rule engine đêm/ngày chưa xây dựng, xem docs/game.md
-  @Post(':gameId/kill/:userId')
+  // NIGHT: chỉ Sói còn sống gọi được (chọn nạn nhân). DAY_VOTE: ai còn sống cũng gọi được
+  // (đề nghị treo cổ). Gọi lại = đổi phiếu. Rule engine tự kiểm phiếu và chuyển pha khi hết giờ.
+  @Post(':gameId/vote')
   @HttpCode(HttpStatus.OK)
-  kill(
+  vote(
     @CurrentUser() user: User,
     @Param('gameId', ParseIntPipe) gameId: number,
-    @Param('userId', ParseIntPipe) userId: number,
+    @Body() dto: CastVoteDto,
   ) {
-    return this.gameService.killPlayer(gameId, user.id, userId);
+    return this.gameService.castVote(gameId, user.id, dto.targetUserId);
+  }
+
+  // Kiểm phiếu hiện tại của lượt đang mở — NIGHT chỉ Sói xem được, DAY_VOTE ai cũng xem được.
+  @Get(':gameId/votes')
+  getVotes(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getVoteTally(gameId, user.id);
   }
 }
