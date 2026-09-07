@@ -27,7 +27,7 @@ export class GameVote {
   @JoinColumn({ name: 'gameId' })
   game: Game;
 
-  // Chỉ nhận NIGHT (Sói chọn cắn) hoặc DAY_VOTE (dân làng treo cổ)
+  // NIGHT (Sói chọn cắn) hoặc DAY (dân làng treo cổ) — cả 2 pha đều mở cổng bỏ phiếu
   @Column({ type: 'enum', enum: GamePhase })
   phase: GamePhase;
 

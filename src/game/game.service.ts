@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { SchedulerRegistry } from '@nestjs/schedule';
 import {
   Game,
   GamePhase,
@@ -16,16 +17,12 @@ import {
 } from './entities/game.entity';
 import { GamePlayer } from './entities/game-player.entity';
 import { GameVote } from './entities/game-vote.entity';
-import { WEREWOLF_ROLES, THIRD_PARTY_ROLES } from './constants/factions';
+import { WEREWOLF_ROLES } from './constants/factions';
 import {
   ROLE_CONFIG_BY_MAX_PLAYERS,
   MaxPlayers,
 } from '../rooms/constants/room-configs';
-import {
-  NIGHT_DURATION_MS,
-  DAY_DISCUSSION_DURATION_MS,
-  DAY_VOTE_DURATION_MS,
-} from './constants/timing';
+import { PHASE_DURATION_MS } from './constants/timing';
 
 interface RoomStartedPayload {
   roomId: number;
@@ -41,11 +38,6 @@ interface RoomDeletedPayload {
 export class GameService {
   private readonly logger = new Logger(GameService.name);
 
-  // Timer của pha đang chạy cho mỗi ván, key = gameId. Chỉ tồn tại trong bộ nhớ process —
-  // nếu server restart thì ván đang chơi sẽ không tự chuyển pha nữa (chấp nhận được ở giai
-  // đoạn chưa có realtime/queue, xem docs/game.md).
-  private readonly phaseTimers = new Map<number, NodeJS.Timeout>();
-
   constructor(
     @InjectRepository(Game)
     private readonly gamesRepo: Repository<Game>,
@@ -54,6 +46,7 @@ export class GameService {
     @InjectRepository(GameVote)
     private readonly votesRepo: Repository<GameVote>,
     private readonly eventEmitter: EventEmitter2,
+    private readonly schedulerRegistry: SchedulerRegistry,
   ) {}
 
   @OnEvent('room.started')
@@ -76,7 +69,7 @@ export class GameService {
           status: GameStatus.IN_PROGRESS,
           phase: GamePhase.NIGHT,
           dayNumber: 0,
-          phaseEndsAt: new Date(Date.now() + NIGHT_DURATION_MS),
+          phaseEndsAt: new Date(Date.now() + PHASE_DURATION_MS),
         }),
       );
 
@@ -91,9 +84,7 @@ export class GameService {
       );
       await this.playersRepo.save(players);
 
-      this.scheduleTimer(game.id, NIGHT_DURATION_MS, () =>
-        this.resolveNightPhase(game.id),
-      );
+      this.schedulePhase(game.id);
     } catch (err) {
       this.logger.error(
         `Tạo ván cho room #${payload.roomId} thất bại`,
@@ -112,7 +103,7 @@ export class GameService {
       where: { roomId: payload.roomId, status: GameStatus.IN_PROGRESS },
     });
     for (const game of games) {
-      this.clearTimer(game.id);
+      this.cancelPhase(game.id);
     }
     await this.gamesRepo.update(
       { roomId: payload.roomId, status: GameStatus.IN_PROGRESS },
@@ -157,18 +148,16 @@ export class GameService {
   }
 
   /**
-   * Bỏ/đổi phiếu của người gọi request cho lượt hiện tại. NIGHT chỉ Sói còn sống được vote
-   * (chọn nạn nhân), DAY_VOTE mọi người còn sống được vote (đề nghị treo cổ). Gọi lại nhiều
-   * lần trong cùng lượt = đổi phiếu, không cộng dồn (UNIQUE theo gameId+phase+dayNumber+voterId).
+   * Bỏ/đổi phiếu của người gọi request cho lượt hiện tại. Cả 2 pha đều mở cổng bỏ phiếu:
+   * NIGHT chỉ Sói còn sống được vote (chọn nạn nhân), DAY mọi người còn sống được vote
+   * (đề nghị treo cổ). Gọi lại nhiều lần trong cùng pha = đổi phiếu, không cộng dồn
+   * (UNIQUE theo gameId+phase+dayNumber+voterId).
    */
   async castVote(gameId: number, voterId: number, targetUserId: number) {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
     if (game.status !== GameStatus.IN_PROGRESS) {
       throw new ConflictException('Ván chơi đã kết thúc');
-    }
-    if (game.phase !== GamePhase.NIGHT && game.phase !== GamePhase.DAY_VOTE) {
-      throw new ConflictException('Chưa tới giờ bỏ phiếu');
     }
 
     const voter = await this.playersRepo.findOneBy({ gameId, userId: voterId });
@@ -216,8 +205,8 @@ export class GameService {
   }
 
   /**
-   * Kiểm phiếu hiện tại của lượt đang mở. NIGHT chỉ Sói còn sống xem được (bàn bạc kín),
-   * DAY_VOTE ai còn trong ván cũng xem được (bỏ phiếu công khai) — xem docs/game-rules.md.
+   * Kiểm phiếu hiện tại của pha đang mở. NIGHT chỉ Sói xem được (bàn bạc kín), DAY ai còn
+   * trong ván cũng xem được (bỏ phiếu công khai) — xem docs/game-rules.md.
    */
   async getVoteTally(gameId: number, requesterId: number) {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
@@ -235,9 +224,6 @@ export class GameService {
       !WEREWOLF_ROLES.includes(requester.role)
     ) {
       throw new ForbiddenException('Chỉ Ma Sói được xem phiếu ban đêm');
-    }
-    if (game.phase === GamePhase.DAY) {
-      throw new ConflictException('Chưa tới giờ bỏ phiếu');
     }
 
     const votes = await this.votesRepo.find({
@@ -259,114 +245,54 @@ export class GameService {
   }
 
   /**
-   * Hết giờ NIGHT: kiểm phiếu Sói, nếu có 1 người bị vote nhiều nhất (không hòa) thì cắn
-   * chết người đó (không công khai nguyên nhân — chỉ đánh dấu isAlive=false). Xem docs/game-rules.md §4-5.
+   * Hết giờ một pha: kiểm phiếu của pha vừa đóng, giết người bị vote nhiều nhất, xét điều
+   * kiện thắng rồi mở pha kế tiếp. NIGHT → DAY → NIGHT (lượt +1) → ...
+   * Xem docs/game-rounds.md §5.
    */
-  private async resolveNightPhase(gameId: number): Promise<void> {
+  private async advanceGame(gameId: number): Promise<void> {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
-    if (
-      !game ||
-      game.status !== GameStatus.IN_PROGRESS ||
-      game.phase !== GamePhase.NIGHT
-    ) {
-      return;
+    if (!game || game.status !== GameStatus.IN_PROGRESS) return;
+
+    await this.resolveVoteKill(game);
+    if (await this.checkWinCondition(game)) return;
+
+    if (game.phase === GamePhase.NIGHT) {
+      game.phase = GamePhase.DAY;
+    } else {
+      game.phase = GamePhase.NIGHT;
+      game.dayNumber += 1;
     }
-
-    const votes = await this.votesRepo.find({
-      where: { gameId, phase: GamePhase.NIGHT, dayNumber: game.dayNumber },
-    });
-    const target = this.pickUniqueMaxTarget(this.tallyByTarget(votes));
-    if (target !== null) {
-      await this.playersRepo.update(
-        { gameId, userId: target },
-        { isAlive: false },
-      );
-    }
-
-    const finished = await this.checkWinCondition(game);
-    if (finished) return;
-
-    game.phase = GamePhase.DAY;
-    game.phaseEndsAt = new Date(Date.now() + DAY_DISCUSSION_DURATION_MS);
+    game.phaseEndsAt = new Date(Date.now() + PHASE_DURATION_MS);
     await this.gamesRepo.save(game);
 
-    this.scheduleTimer(game.id, DAY_DISCUSSION_DURATION_MS, () =>
-      this.startDayVote(game.id),
-    );
-  }
-
-  /** Hết giờ thảo luận DAY: mở cửa bỏ phiếu treo cổ trong 1 phút. */
-  private async startDayVote(gameId: number): Promise<void> {
-    const game = await this.gamesRepo.findOneBy({ id: gameId });
-    if (
-      !game ||
-      game.status !== GameStatus.IN_PROGRESS ||
-      game.phase !== GamePhase.DAY
-    ) {
-      return;
-    }
-
-    game.phase = GamePhase.DAY_VOTE;
-    game.phaseEndsAt = new Date(Date.now() + DAY_VOTE_DURATION_MS);
-    await this.gamesRepo.save(game);
-
-    this.scheduleTimer(game.id, DAY_VOTE_DURATION_MS, () =>
-      this.resolveDayPhase(game.id),
-    );
+    this.schedulePhase(game.id);
   }
 
   /**
-   * Hết giờ DAY_VOTE: kiểm phiếu cả làng, nếu có 1 người bị vote nhiều nhất (không hòa) thì
-   * treo cổ người đó. Người điên bị treo cổ thắng ngay (phe thứ ba) — xem docs/game-rules.md §5.
+   * Kiểm phiếu của pha đang mở và giết người bị vote nhiều nhất. Hòa phiếu hoặc không ai
+   * bỏ phiếu thì không ai chết.
    */
-  private async resolveDayPhase(gameId: number): Promise<void> {
-    const game = await this.gamesRepo.findOneBy({ id: gameId });
-    if (
-      !game ||
-      game.status !== GameStatus.IN_PROGRESS ||
-      game.phase !== GamePhase.DAY_VOTE
-    ) {
-      return;
-    }
-
+  private async resolveVoteKill(game: Game): Promise<GamePlayer | null> {
     const votes = await this.votesRepo.find({
-      where: { gameId, phase: GamePhase.DAY_VOTE, dayNumber: game.dayNumber },
+      where: { gameId: game.id, phase: game.phase, dayNumber: game.dayNumber },
     });
-    const targetUserId = this.pickUniqueMaxTarget(this.tallyByTarget(votes));
+    const targetId = this.pickUniqueMaxTarget(this.tallyByTarget(votes));
+    if (targetId === null) return null;
 
-    let lynched: GamePlayer | null = null;
-    if (targetUserId !== null) {
-      lynched = await this.playersRepo.findOneBy({
-        gameId,
-        userId: targetUserId,
-      });
-      if (lynched) {
-        lynched.isAlive = false;
-        await this.playersRepo.save(lynched);
-      }
-    }
+    const target = await this.playersRepo.findOneBy({
+      gameId: game.id,
+      userId: targetId,
+    });
+    if (!target) return null;
 
-    if (lynched && THIRD_PARTY_ROLES.includes(lynched.role)) {
-      await this.finishGame(game.id, GameWinner.THIRD_PARTY);
-      return;
-    }
-
-    const finished = await this.checkWinCondition(game);
-    if (finished) return;
-
-    game.dayNumber += 1;
-    game.phase = GamePhase.NIGHT;
-    game.phaseEndsAt = new Date(Date.now() + NIGHT_DURATION_MS);
-    await this.gamesRepo.save(game);
-
-    this.scheduleTimer(game.id, NIGHT_DURATION_MS, () =>
-      this.resolveNightPhase(game.id),
-    );
+    target.isAlive = false;
+    await this.playersRepo.save(target);
+    return target;
   }
 
   /**
-   * Điều kiện thắng theo docs/game-rules.md §5, dựa trên số người còn sống (không phụ thuộc
-   * nguyên nhân chết). Điều kiện thắng riêng của "Người điên" xử lý ở resolveDayPhase().
+   * Điều kiện thắng theo docs/game-rules.md §5, dựa trên số người còn sống. Giai đoạn này
+   * chỉ có 2 phe nên không xét THIRD_PARTY.
    */
   private async checkWinCondition(game: Game): Promise<boolean> {
     const players = await this.playersRepo.find({
@@ -394,7 +320,7 @@ export class GameService {
   }
 
   private async finishGame(gameId: number, winner: GameWinner): Promise<void> {
-    this.clearTimer(gameId);
+    this.cancelPhase(gameId);
     await this.gamesRepo.update(gameId, {
       status: GameStatus.FINISHED,
       winner,
@@ -459,29 +385,32 @@ export class GameService {
     return maxCount > 0 && !isTie ? maxTarget : null;
   }
 
-  private scheduleTimer(
-    gameId: number,
-    delayMs: number,
-    handler: () => Promise<void>,
-  ): void {
-    this.clearTimer(gameId);
+  private phaseTimerName(gameId: number): string {
+    return `game-phase-${gameId}`;
+  }
+
+  /**
+   * Hẹn giờ đóng pha hiện tại của một ván. Timer nằm trong RAM (SchedulerRegistry) nên
+   * restart server là ván đứng — nợ kỹ thuật đã ghi ở PLAN.md §7.
+   */
+  private schedulePhase(gameId: number): void {
+    this.cancelPhase(gameId); // mỗi ván chỉ giữ đúng 1 timer
     const timeout = setTimeout(() => {
-      this.phaseTimers.delete(gameId);
-      handler().catch((err) =>
+      this.cancelPhase(gameId); // dọn khỏi registry trước khi chạy
+      this.advanceGame(gameId).catch((err) =>
         this.logger.error(
           `Lỗi khi tự động chuyển pha cho game #${gameId}`,
           err instanceof Error ? err.stack : undefined,
         ),
       );
-    }, delayMs);
-    this.phaseTimers.set(gameId, timeout);
+    }, PHASE_DURATION_MS);
+    this.schedulerRegistry.addTimeout(this.phaseTimerName(gameId), timeout);
   }
 
-  private clearTimer(gameId: number): void {
-    const existing = this.phaseTimers.get(gameId);
-    if (existing) {
-      clearTimeout(existing);
-      this.phaseTimers.delete(gameId);
+  private cancelPhase(gameId: number): void {
+    const name = this.phaseTimerName(gameId);
+    if (this.schedulerRegistry.doesExist('timeout', name)) {
+      this.schedulerRegistry.deleteTimeout(name); // tự gọi clearTimeout bên trong
     }
   }
 }

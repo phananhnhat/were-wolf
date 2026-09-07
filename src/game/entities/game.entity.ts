@@ -11,12 +11,11 @@ export enum GameStatus {
   CANCELLED = 'CANCELLED',
 }
 
-// DAY tách thành 2 pha kỹ thuật: DAY (thảo luận) rồi DAY_VOTE (bỏ phiếu treo cổ) — xem
-// docs/game-rules.md §4 bước "Ban ngày". Vote của mỗi pha được lưu riêng theo (phase, dayNumber).
+// Một lượt chơi = 2 pha, mỗi pha 60s và cả hai đều mở cổng bỏ phiếu — xem docs/game-rounds.md.
+// Vote của mỗi pha lưu riêng theo (phase, dayNumber).
 export enum GamePhase {
-  NIGHT = 'NIGHT',
-  DAY = 'DAY',
-  DAY_VOTE = 'DAY_VOTE',
+  NIGHT = 'NIGHT', // Sói bỏ phiếu chọn nạn nhân
+  DAY = 'DAY', // Cả làng bỏ phiếu treo cổ
 }
 
 export enum GameWinner {
@@ -42,8 +41,9 @@ export class Game {
   @Column({ type: 'smallint', default: 0 })
   dayNumber: number;
 
-  // Thời điểm pha hiện tại tự động kết thúc (rule engine dùng để lên lịch timer) — null khi
-  // ván đã FINISHED/CANCELLED
+  // Thời điểm pha hiện tại kết thúc, để client đếm ngược — null khi ván đã FINISHED/CANCELLED.
+  // Không phải nguồn sự thật của bộ hẹn giờ: lịch chuyển pha nằm trong RAM (SchedulerRegistry),
+  // nên restart server là ván đứng — nợ kỹ thuật đã ghi ở PLAN.md §7.
   @Column({ type: 'timestamp', nullable: true })
   phaseEndsAt: Date | null;
 

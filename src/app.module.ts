@@ -2,11 +2,11 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
-import { GroupsModule } from './groups/groups.module';
 import { AuthModule } from './auth/auth.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { GameModule } from './game/game.module';
@@ -30,6 +30,10 @@ import { GameVote } from './game/entities/game-vote.entity';
     // Global — RoomsModule/GameModule không import lẫn nhau, phối hợp qua event
     // (EventEmitter2.emit / @OnEvent) để tránh circular dependency, xem docs/game.md §2
     EventEmitterModule.forRoot(),
+
+    // Cung cấp SchedulerRegistry — GameService dùng để hẹn giờ đóng pha cho từng ván
+    // (mỗi ván 1 timer riêng, xem docs/game-rounds.md §5)
+    ScheduleModule.forRoot(),
 
     // forRootAsync thay vì forRoot vì cần inject ConfigService để đọc DATABASE_URL
     // (ConfigService chỉ available sau khi ConfigModule khởi động xong)
@@ -89,7 +93,6 @@ import { GameVote } from './game/entities/game-vote.entity';
     //   }),
     // }),
     UsersModule,
-    GroupsModule,
     AuthModule,
     RoomsModule,
     GameModule,

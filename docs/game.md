@@ -13,9 +13,9 @@ Tài liệu này chỉ thiết kế phần **khởi tạo và kết thúc một 
 | `id` | serial PK | |
 | `roomId` | FK → `rooms.id` | Không unique — 1 phòng có thể chơi nhiều ván (mỗi lần `finishGame()` phòng quay về `WAITING` rồi start lại) |
 | `status` | enum: `IN_PROGRESS`, `FINISHED`, `CANCELLED` | |
-| `phase` | enum: `NIGHT`, `DAY` | Mặc định `NIGHT` lúc tạo (đêm 0) |
-| `dayNumber` | smallint, default 0 | Tăng dần mỗi khi chuyển `DAY` → `NIGHT` |
-| `winner` | enum nullable: `VILLAGER`, `WEREWOLF`, `THIRD_PARTY` | `null` khi ván chưa kết thúc |
+| `phase` | enum: `NIGHT`, `DAY` | Mặc định `NIGHT` lúc tạo. Cả 2 pha đều 60s và đều mở cổng bỏ phiếu — xem [game-rounds.md](./game-rounds.md) |
+| `dayNumber` | smallint, default 0 | Số thứ tự lượt chơi, tăng mỗi khi chuyển `DAY` → `NIGHT` |
+| `winner` | enum nullable: `VILLAGER`, `WEREWOLF`, `THIRD_PARTY` | `null` khi ván chưa kết thúc. `THIRD_PARTY` hiện chưa dùng — dành cho vai Người điên khi nâng cấp |
 | `startedAt` | timestamp | |
 | `finishedAt` | timestamp nullable | |
 
@@ -26,7 +26,7 @@ Tài liệu này chỉ thiết kế phần **khởi tạo và kết thúc một 
 | `id` | serial PK | |
 | `gameId` | FK → `games.id`, `ON DELETE CASCADE` | |
 | `userId` | FK → `users.id` | |
-| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS` (`werewolf`, `villager`, `seer`, `guard`, `witch`, `hunter`, `fool`) |
+| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Giai đoạn này chỉ có `werewolf` và `villager` |
 | `isAlive` | boolean, default true | |
 
 Ràng buộc: `UNIQUE(gameId, userId)`.
@@ -73,7 +73,7 @@ Thay vào đó dùng `@nestjs/event-emitter` (`EventEmitterModule.forRoot()` đ�
 ## 4. Chia vai trò (thuật toán)
 
 1. Lấy `roleConfig = ROLE_CONFIG_BY_MAX_PLAYERS[maxPlayers]` (định nghĩa tại `src/rooms/constants/room-configs.ts`, xem [room.md §1.1](./room.md)).
-2. Build một mảng phẳng các vai trò từ `roleConfig`, ví dụ với 6 người `{werewolf:1, villager:4, seer:1}` → `['werewolf','villager','villager','villager','villager','seer']`.
+2. Build một mảng phẳng các vai trò từ `roleConfig`, ví dụ với 6 người `{werewolf:1, villager:5}` → `['werewolf','villager','villager','villager','villager','villager']`.
 3. Shuffle mảng vai trò bằng thuật toán Fisher–Yates (đảm bảo phân phối đều, tránh bias của `Array.sort(() => Math.random() - 0.5)`).
 4. Ghép theo index với `memberIds` (thứ tự `memberIds` không quan trọng vì vai trò đã được xáo trộn độc lập).
 5. Insert từng `GamePlayer { gameId, userId, role, isAlive: true }`.
@@ -121,37 +121,46 @@ Vai trò là bí mật riêng của từng người chơi (trừ phe Sói biết
 
 ## 9. Rule engine bỏ phiếu (đêm/ngày)
 
-`POST /games/:gameId/kill/:userId` (placeholder) đã được thay bằng rule engine thật, tự chạy bằng timer trong `GameService` (không dùng queue/`@nestjs/schedule` — `setTimeout` trong bộ nhớ process, key theo `gameId`). Chưa có WebSocket nên client tự poll `GET /games/room/:roomId` để lấy `phase`/`phaseEndsAt`/kết quả mới nhất.
+`POST /games/:gameId/kill/:userId` (placeholder) đã được thay bằng rule engine thật. Lịch chuyển pha do `SchedulerRegistry` của `@nestjs/schedule` giữ — **mỗi ván một timer riêng** tên `game-phase-{id}`, không quét DB định kỳ. Chưa có WebSocket nên client tự poll `GET /games/room/:roomId` để lấy `phase`/`phaseEndsAt`/kết quả mới nhất.
+
+Thiết kế đầy đủ của vòng lượt: [game-rounds.md](./game-rounds.md).
 
 ### 9.1. Pha và thời lượng
 
-`Game.phase` có 3 giá trị: `NIGHT` → `DAY` (thảo luận) → `DAY_VOTE` (bỏ phiếu) → quay lại `NIGHT` (tăng `dayNumber`). `game-rules.md` §4 mô tả "Ban ngày" là 1 pha gộp thảo luận + vote; `DAY`/`DAY_VOTE` là 2 pha kỹ thuật tách ra để rule engine biết lúc nào mở cửa nhận phiếu.
+`Game.phase` có 2 giá trị và **cả hai đều mở cổng bỏ phiếu**: `NIGHT` → `DAY` → quay lại `NIGHT` (tăng `dayNumber`). Một lượt = 2 pha = 120 giây.
 
 | Pha | Thời lượng | Ai được vote | Kết thúc pha |
 |---|---|---|---|
-| `NIGHT` | 2 phút | Sói còn sống, chọn nạn nhân | Kiểm phiếu Sói → cắn chết người nhiều phiếu nhất (không công khai), rồi chuyển `DAY` |
-| `DAY` | 5 phút | Không nhận phiếu (chỉ thảo luận) | Hết giờ tự chuyển `DAY_VOTE`, không kiểm phiếu gì |
-| `DAY_VOTE` | 1 phút | Toàn bộ người còn sống, chọn người treo cổ | Kiểm phiếu cả làng → treo cổ người nhiều phiếu nhất, rồi kiểm tra thắng thua (mục 5), nếu chưa xong thì `dayNumber += 1` và quay lại `NIGHT` |
+| `NIGHT` | 60 giây | Sói còn sống, chọn nạn nhân | Kiểm phiếu Sói → cắn chết người nhiều phiếu nhất (không công khai) → xét thắng thua → chuyển `DAY` |
+| `DAY` | 60 giây | Toàn bộ người còn sống, chọn người treo cổ | Kiểm phiếu cả làng → treo cổ người nhiều phiếu nhất → xét thắng thua (mục 5) → `dayNumber += 1` và quay lại `NIGHT` |
 
-**Hòa phiếu (không có ai có số phiếu cao nhất duy nhất) → không giết/không treo cổ ai** — áp dụng như nhau cho cả `NIGHT` và `DAY_VOTE`.
+**Hòa phiếu (không có ai có số phiếu cao nhất duy nhất) → không giết/không treo cổ ai** — áp dụng như nhau cho cả 2 pha.
+
+Không còn pha thảo luận riêng: cả làng bàn bạc ngay trong 60 giây của `DAY`.
 
 ### 9.2. Endpoint
 
 | Method | Path | Mô tả |
 |---|---|---|
 | `GET` | `/games/room/:roomId` | Trạng thái ván hiện tại (kèm `phase`, `dayNumber`, `phaseEndsAt`), áp bộ lọc ẩn vai trò ở mục 7 |
-| `POST` | `/games/:gameId/vote` | Body `{ targetUserId }`. `NIGHT`: chỉ Sói còn sống gọi được. `DAY_VOTE`: ai còn sống cũng gọi được. Gọi lại nhiều lần = đổi phiếu (không cộng dồn) |
-| `GET` | `/games/:gameId/votes` | Kiểm phiếu hiện tại của lượt đang mở. `NIGHT` chỉ Sói xem được (bàn bạc kín, thấy phiếu đổi real-time qua polling); `DAY_VOTE` ai cũng xem được (công khai) |
+| `POST` | `/games/:gameId/vote` | Body `{ targetUserId }`. `NIGHT`: chỉ Sói còn sống gọi được. `DAY`: ai còn sống cũng gọi được. Gọi lại nhiều lần = đổi phiếu (không cộng dồn) |
+| `GET` | `/games/:gameId/votes` | Kiểm phiếu hiện tại của pha đang mở. `NIGHT` chỉ Sói xem được (bàn bạc kín, thấy phiếu đổi real-time qua polling); `DAY` ai cũng xem được (công khai) |
 
 Bảng `game_votes` lưu 1 dòng/người/lượt (`UNIQUE(gameId, phase, dayNumber, voterId)`) — đổi phiếu là `UPDATE`, không tạo dòng mới, nên kiểm phiếu luôn tính đúng phiếu gần nhất.
 
-### 9.3. Điều kiện thắng đã xử lý đầy đủ
+### 9.3. Điều kiện thắng
 
-Khác với placeholder cũ, rule engine giờ xử lý luôn điều kiện thắng của "Người điên" (mục [game-rules.md §5](./game-rules.md)): nếu người bị treo cổ trong `DAY_VOTE` có vai trò thuộc `THIRD_PARTY_ROLES`, ván kết thúc ngay với `winner = THIRD_PARTY` (đơn giản hoá — không xử lý trường hợp nhiều phe cùng thắng độc lập).
+Giai đoạn này chỉ có 2 phe nên `checkWinCondition()` chỉ xét theo số người còn sống (mục [game-rules.md §5](./game-rules.md)):
+
+- Không còn Sói sống → `winner = VILLAGER`
+- Số Sói ≥ số phe Dân còn sống → `winner = WEREWOLF`
+
+Điều kiện thắng của "Người điên" (`winner = THIRD_PARTY`) **chưa xử lý** vì vai `fool` chưa có trong bảng chia vai. Giá trị `THIRD_PARTY` vẫn giữ trong enum `GameWinner` để dành cho lúc nâng cấp.
 
 ### 9.4. Giới hạn hiện tại
 
-- Timer chạy trong bộ nhớ process (`Map<gameId, Timeout>` trong `GameService`) — server restart giữa ván sẽ làm ván đó không tự chuyển pha nữa (chưa có persistence/queue cho timer).
+- Timer chạy trong bộ nhớ process (`SchedulerRegistry` của `@nestjs/schedule`) — server restart giữa ván sẽ làm ván đó không tự chuyển pha nữa, **và người chơi bị nhốt trong phòng** vì `rooms.status` kẹt ở `PLAYING`. Đã ghi thành nợ kỹ thuật ở [PLAN.md §9](../PLAN.md).
+- Chỉ có 2 vai (`werewolf`, `villager`) — các vai đặc biệt ở [game-rules.md §2](./game-rules.md) chưa được chia và chưa có endpoint dùng kỹ năng.
 - Chưa có WebSocket broadcast — client phải tự poll để biết pha đổi/ai bị giết. Thiết kế gateway tương lai xem [room.md §6](./room.md).
 
 ---

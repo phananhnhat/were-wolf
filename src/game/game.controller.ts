@@ -25,7 +25,7 @@ export class GameController {
     return this.gameService.getGameStateForUser(roomId, user.id);
   }
 
-  // NIGHT: chỉ Sói còn sống gọi được (chọn nạn nhân). DAY_VOTE: ai còn sống cũng gọi được
+  // NIGHT: chỉ Sói còn sống gọi được (chọn nạn nhân). DAY: ai còn sống cũng gọi được
   // (đề nghị treo cổ). Gọi lại = đổi phiếu. Rule engine tự kiểm phiếu và chuyển pha khi hết giờ.
   @Post(':gameId/vote')
   @HttpCode(HttpStatus.OK)
@@ -37,7 +37,7 @@ export class GameController {
     return this.gameService.castVote(gameId, user.id, dto.targetUserId);
   }
 
-  // Kiểm phiếu hiện tại của lượt đang mở — NIGHT chỉ Sói xem được, DAY_VOTE ai cũng xem được.
+  // Kiểm phiếu hiện tại của pha đang mở — NIGHT chỉ Sói xem được, DAY ai cũng xem được.
   @Get(':gameId/votes')
   getVotes(
     @CurrentUser() user: User,

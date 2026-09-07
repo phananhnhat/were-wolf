@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
@@ -35,7 +39,15 @@ export class UsersService {
     return this.repo.save(this.repo.create(dto));
   }
 
-  async update(id: number, dto: UpdateUserDto): Promise<User> {
+  /**
+   * Chỉ chính chủ mới được sửa hồ sơ của mình. `actorId` lấy từ access token
+   * (`@CurrentUser()`), không phải từ body/param — client không tự khai được.
+   */
+  async update(actorId: number, id: number, dto: UpdateUserDto): Promise<User> {
+    if (actorId !== id) {
+      throw new ForbiddenException('Bạn chỉ được sửa thông tin của chính mình');
+    }
+
     const user = await this.findOne(id);
     Object.assign(user, dto);
     return this.repo.save(user);

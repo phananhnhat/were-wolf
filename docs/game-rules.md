@@ -49,7 +49,7 @@ Tài liệu này mô tả **luật chơi** cơ bản của Ma Sói làm cơ sở
 | Người điên (Tanner/Fool) | Thắng nếu chính mình bị dân làng treo cổ |
 | Kẻ ăn thịt người (Cannibal, tuỳ biến thể) | Thắng theo điều kiện riêng, không phe nào |
 
-> Vai trò cụ thể của mỗi ván được xác định qua `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` (định nghĩa tĩnh trong code, xem mục 6 bên dưới), ví dụ `{"werewolf":1,"villager":4,"seer":1}` với phòng 6 người.
+> Vai trò cụ thể của mỗi ván được xác định qua `ROLE_CONFIG_BY_MAX_PLAYERS[room.maxPlayers]` (định nghĩa tĩnh trong code, xem mục 6 bên dưới), ví dụ `{"werewolf":1,"villager":5}` với phòng 6 người (giai đoạn này chỉ có 2 vai; các vai đặc biệt mô tả ở trên sẽ bổ sung sau).
 
 ---
 
