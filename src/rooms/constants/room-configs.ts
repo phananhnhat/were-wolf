@@ -13,8 +13,8 @@ export const ROLE_CONFIG_BY_MAX_PLAYERS: Record<
   MaxPlayers,
   Record<string, number>
 > = {
-  6: { werewolf: 1, villager: 5, seer: 0 },
-  8: { werewolf: 2, villager: 5, seer: 1 },
-  10: { werewolf: 2, villager: 7, seer: 1 },
-  15: { werewolf: 3, villager: 11, seer: 1 },
+  6: { werewolf: 1, villager: 4, guardian: 1, seer: 0 },
+  8: { werewolf: 2, villager: 4, guardian: 1, seer: 1 },
+  10: { werewolf: 2, villager: 6, guardian: 1, seer: 1 },
+  15: { werewolf: 3, villager: 10, guardian: 1, seer: 1 },
 };

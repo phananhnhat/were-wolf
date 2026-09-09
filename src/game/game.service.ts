@@ -20,7 +20,7 @@ import { GamePlayer } from './entities/game-player.entity';
 import { GameVote } from './entities/game-vote.entity';
 import { GameAction } from './entities/game-action.entity';
 import { GameActionType, SeerCheckResult } from './constants/actions';
-import { SEER_ROLE, WEREWOLF_ROLES } from './constants/factions';
+import { GUARDIAN_ROLE, SEER_ROLE, WEREWOLF_ROLES } from './constants/factions';
 import {
   ROLE_CONFIG_BY_MAX_PLAYERS,
   MaxPlayers,
@@ -305,6 +305,70 @@ export class GameService {
     return { dayNumber: game.dayNumber, targetUserId, isWerewolf };
   }
 
+  async guardianProtect(gameId: number, actorId: number, targetUserId: number) {
+    const game = await this.gamesRepo.findOneBy({ id: gameId });
+    if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
+    if (game.status !== GameStatus.IN_PROGRESS) {
+      throw new ConflictException('Ván chơi đã kết thúc');
+    }
+    if (game.phase !== GamePhase.NIGHT) {
+      throw new ConflictException('Bảo vệ chỉ được dùng chức năng vào ban đêm');
+    }
+
+    const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
+    if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
+    if (actor.role !== GUARDIAN_ROLE) {
+      throw new ForbiddenException('Chỉ Tiên tri mới dùng được kỹ năng này');
+    }
+
+    if (!actor.isAlive) {
+      throw new ForbiddenException('Bạn đã chết, không thể thực hiện');
+    }
+
+    // Tầng chặn 1: hỏi trước cho thông báo dễ hiểu. Tầng 2 là ràng buộc UNIQUE bên dưới,
+    // bịt khe hở giữa lúc kiểm tra và lúc ghi — xem docs/role-tien-tri.md §4.5.
+    if (await this.findGuardianProtect(gameId, game.dayNumber, actorId)) {
+      throw new ConflictException('Đêm nay bạn đã dùng lượt kĩ năng rồi');
+    }
+
+    // if (targetUserId === actorId) {
+    //   throw new BadRequestException('Không thể tự soi chính mình');
+    // }
+
+    const target = await this.playersRepo.findOneBy({
+      gameId,
+      userId: targetUserId,
+    });
+    if (!target) throw new NotFoundException('Người chơi không thuộc ván này');
+    if (!target.isAlive) {
+      throw new ConflictException('Không thể xem người đã chết');
+    }
+
+    // Chỉ nhị phân — không lộ tên vai cụ thể.
+    const isWerewolf = WEREWOLF_ROLES.includes(target.role);
+
+    try {
+      await this.actionsRepo.insert({
+        gameId,
+        dayNumber: game.dayNumber,
+        actionType: GameActionType.SEER_CHECK,
+        actorId,
+        targetId: targetUserId,
+        result: isWerewolf
+          ? SeerCheckResult.WEREWOLF
+          : SeerCheckResult.NOT_WEREWOLF,
+      });
+    } catch (err) {
+      // Tầng chặn 2: 2 request song song cùng vượt qua tầng 1 rồi cùng ghi.
+      if (this.isUniqueViolation(err)) {
+        throw new ConflictException('Đêm nay bạn đã dùng lượt soi rồi');
+      }
+      throw err;
+    }
+
+    return { dayNumber: game.dayNumber, targetUserId, isWerewolf };
+  }
+
   /**
    * Lịch sử soi của CHÍNH người gọi từ đầu ván. Luôn lọc theo danh tính lấy từ access token,
    * không bao giờ theo tham số client gửi lên — xem docs/role-tien-tri.md §7.
@@ -330,17 +394,44 @@ export class GameService {
     };
   }
 
+  private findAction(
+    gameId: number,
+    dayNumber: number,
+    actorId: number,
+    actionType: (typeof GameActionType)[keyof typeof GameActionType],
+  ): Promise<GameAction | null> {
+    return this.actionsRepo.findOneBy({
+      gameId,
+      dayNumber,
+      actionType,
+      actorId,
+    });
+  }
+
   private findSeerCheck(
     gameId: number,
     dayNumber: number,
     actorId: number,
   ): Promise<GameAction | null> {
-    return this.actionsRepo.findOneBy({
+    return this.findAction(
       gameId,
       dayNumber,
-      actionType: GameActionType.SEER_CHECK,
       actorId,
-    });
+      GameActionType.SEER_CHECK,
+    );
+  }
+
+  private findGuardianProtect(
+    gameId: number,
+    dayNumber: number,
+    actorId: number,
+  ): Promise<GameAction | null> {
+    return this.findAction(
+      gameId,
+      dayNumber,
+      actorId,
+      GameActionType.GUARDIAN_PROTECT,
+    );
   }
 
   /** Điều kiện soi KHÔNG tính chuyện "đêm nay đã soi chưa" — phần đó tra riêng. */

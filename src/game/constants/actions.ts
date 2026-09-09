@@ -3,7 +3,8 @@
 // Xem docs/role-tien-tri.md §2.
 export enum GameActionType {
   SEER_CHECK = 'SEER_CHECK',
-  // Sau này: GUARD_PROTECT, WITCH_HEAL, WITCH_POISON, HUNTER_SHOOT
+  GUARDIAN_PROTECT = 'GUARDIAN_PROTECT',
+  // Sau này: WITCH_HEAL, WITCH_POISON, HUNTER_SHOOT
 }
 
 // Kết quả soi của Tiên tri — cố ý chỉ nhị phân, KHÔNG trả tên vai cụ thể. Trả tên vai sẽ
@@ -12,3 +13,6 @@ export enum SeerCheckResult {
   WEREWOLF = 'WEREWOLF',
   NOT_WEREWOLF = 'NOT_WEREWOLF',
 }
+
+type A = (typeof GameActionType)[keyof typeof GameActionType];
+const B: A = GameActionType.SEER_CHECK;

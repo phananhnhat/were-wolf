@@ -13,6 +13,7 @@ import { CastVoteDto } from './dto/cast-vote.dto';
 import { SeerCheckDto } from './dto/seer-check.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
+import { GuardianProtectDto } from './dto/guardian-protect.dto';
 
 @Controller('games')
 export class GameController {
@@ -66,6 +67,16 @@ export class GameController {
     @CurrentUser() user: User,
     @Param('gameId', ParseIntPipe) gameId: number,
     @Body() dto: SeerCheckDto,
+  ) {
+    return this.gameService.seerCheck(gameId, user.id, dto.targetUserId);
+  }
+
+  @Post(':gameId/guardian/protect')
+  @HttpCode(HttpStatus.OK)
+  guardianProtect(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+    @Body() dto: GuardianProtectDto,
   ) {
     return this.gameService.seerCheck(gameId, user.id, dto.targetUserId);
   }

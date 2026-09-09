@@ -6,3 +6,4 @@ export const WEREWOLF_ROLES = ['werewolf'];
 // Tên vai Tiên tri, khớp key trong ROLE_CONFIG_BY_MAX_PLAYERS. Thuộc phe Dân — không cần
 // khai báo gì thêm vì mọi vai không nằm trong WEREWOLF_ROLES đều được tính là phe Dân.
 export const SEER_ROLE = 'seer';
+export const GUARDIAN_ROLE = 'guardian';
