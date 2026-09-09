@@ -26,7 +26,7 @@ Tài liệu này chỉ thiết kế phần **khởi tạo và kết thúc một 
 | `id` | serial PK | |
 | `gameId` | FK → `games.id`, `ON DELETE CASCADE` | |
 | `userId` | FK → `users.id` | |
-| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Giai đoạn này chỉ có `werewolf` và `villager` |
+| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Hiện có `werewolf`, `villager`, `seer` |
 | `isAlive` | boolean, default true | |
 
 Ràng buộc: `UNIQUE(gameId, userId)`.
@@ -98,13 +98,19 @@ Thay vào đó dùng `@nestjs/event-emitter` (`EventEmitterModule.forRoot()` đ�
 
 ## 7. Bảo mật thông tin vai trò
 
-Vai trò là bí mật riêng của từng người chơi (trừ phe Sói biết nhau). Endpoint lấy trạng thái ván (thiết kế chi tiết để sau, ngoài phạm vi tài liệu này) **không được** trả `role` của người khác một cách trần trụi:
+Vai trò là bí mật. Thông tin được tách làm 2 endpoint theo nguyên tắc ở §9.2 — dưới đây là quy tắc lộ vai của từng bên.
 
-- `myRole`: vai trò của chính user gọi request.
-- Danh sách người chơi khác: chỉ trả `{ userId, isAlive }`, **không** kèm `role` — trừ khi:
-  - Người chơi đó đã chết (`isAlive = false`) — có thể công khai vai trò lúc chết theo luật (tuỳ biến thể).
-  - Ván đã `FINISHED`/`CANCELLED` — công khai toàn bộ vai trò để tổng kết.
-  - User gọi request thuộc phe Sói và người được hỏi cũng là Sói (Sói biết nhau).
+**`GET /games/room/:roomId`** — danh sách người chơi chỉ trả `{ userId, isAlive, role }`, trong đó `role` là `null` trừ khi:
+
+- Người chơi đó **đã chết** (`isAlive = false`) — vai công khai lúc chết, **mọi người đều thấy như nhau**.
+- Ván đã `FINISHED`/`CANCELLED` — công khai toàn bộ để tổng kết.
+
+> Điều kiện "đã chết" xét trên **người đang được liệt kê**, không phải người đang xem. Một người chết đi thì vai của *họ* lộ cho cả làng; còn *họ* thì vẫn không nhìn thấy vai của những người còn sống.
+
+**`GET /games/:gameId/me`** — nơi duy nhất trả dữ liệu phụ thuộc người gọi:
+
+- `role`: vai của chính người gọi.
+- `teammates`: danh sách Sói khác — **chỉ dựng khi người gọi là Sói**. Đây là chỗ cài luật "Sói biết nhau", đã chuyển ra khỏi endpoint trạng thái ván.
 
 ---
 
@@ -142,11 +148,82 @@ Không còn pha thảo luận riêng: cả làng bàn bạc ngay trong 60 giây 
 
 | Method | Path | Mô tả |
 |---|---|---|
-| `GET` | `/games/room/:roomId` | Trạng thái ván hiện tại (kèm `phase`, `dayNumber`, `phaseEndsAt`), áp bộ lọc ẩn vai trò ở mục 7 |
+| `GET` | `/games/room/:roomId` | Trạng thái ván — **giống hệt nhau với mọi người trong ván** |
+| `GET` | `/games/:gameId/me` | Mọi thứ riêng tư của người gọi (vai, đồng đội, kỹ năng) |
 | `POST` | `/games/:gameId/vote` | Body `{ targetUserId }`. `NIGHT`: chỉ Sói còn sống gọi được. `DAY`: ai còn sống cũng gọi được. Gọi lại nhiều lần = đổi phiếu (không cộng dồn) |
 | `GET` | `/games/:gameId/votes` | Kiểm phiếu hiện tại của pha đang mở. `NIGHT` chỉ Sói xem được (bàn bạc kín, thấy phiếu đổi real-time qua polling); `DAY` ai cũng xem được (công khai) |
+| `POST` | `/games/:gameId/seer/check` | Body `{ targetUserId }`. Tiên tri soi 1 người trong đêm hiện tại — mỗi đêm 1 lượt, ghi rồi không sửa được |
+| `GET` | `/games/:gameId/seer/checks` | Lịch sử soi của chính người gọi. Chỉ Tiên tri đọc được, lọc theo danh tính từ access token |
 
 Bảng `game_votes` lưu 1 dòng/người/lượt (`UNIQUE(gameId, phase, dayNumber, voterId)`) — đổi phiếu là `UPDATE`, không tạo dòng mới, nên kiểm phiếu luôn tính đúng phiếu gần nhất.
+
+#### Nguyên tắc tách: trạng thái ván ≠ trạng thái của tôi
+
+Hai endpoint đầu **không được gộp**. Ranh giới:
+
+| | `/games/room/:roomId` | `/games/:gameId/me` |
+|---|---|---|
+| Nội dung | Ván đang thế nào | Tôi là ai, tôi làm được gì lúc này |
+| Phụ thuộc người gọi | **Không** — 2 người cùng ván nhận phản hồi y hệt nhau | **Có** — mỗi người một kiểu |
+| Chứa bí mật | Không | Có |
+
+Lợi ích của việc giữ endpoint ván **không phụ thuộc người xem**: chỉ cần lọt một trường bí mật vào đó là lộ cho *tất cả* người chơi. Khi endpoint đó về nguyên tắc không chứa gì riêng tư thì việc rà soát rò rỉ chỉ còn gói gọn ở `/me`. Đây cũng là chỗ đặt tự nhiên cho mọi vai đặc biệt sau này (Bảo vệ đã che ai chưa, Phù thuỷ còn mấy bình thuốc) — không phải phình endpoint ván ra mỗi lần thêm vai.
+
+#### `GET /games/room/:roomId`
+
+```jsonc
+// Phòng đã/đang chơi
+{
+  "game": {
+    "id": 12, "roomId": 4,
+    "status": "IN_PROGRESS", "phase": "NIGHT",
+    "dayNumber": 2, "phaseEndsAt": "...", "winner": null,
+    "players": [
+      { "userId": 3, "isAlive": true,  "role": null },
+      { "userId": 7, "isAlive": false, "role": "werewolf" }
+    ]
+  }
+}
+
+// Phòng chưa chơi ván nào — 200, KHÔNG phải 404
+{ "game": null }
+```
+
+**Phòng chưa có ván không phải lỗi.** Đó là trạng thái bình thường của một phòng đang chờ, nên endpoint trả `{ "game": null }` với mã 200 để client cứ gọi thoải mái mà không phải bắt 404.
+
+Kết quả được bọc trong khoá `game` thay vì trả thẳng object (hoặc trả `null` trần) vì Nest gửi **body rỗng** khi handler trả `null` — client không phân biệt được với lỗi mạng, và `res.json()` sẽ ném lỗi khi parse. Bọc lại cũng cho cùng một kiểu với `{ "room": ... }` của `GET /rooms/me`.
+
+`role` chỉ hiện khi **khách quan đã công khai**: người đó đã chết, hoặc ván đã kết thúc. Không phụ thuộc việc người gọi có phải Sói hay không.
+
+Vẫn còn đúng một lỗi thật ở endpoint này: người gọi **không thuộc ván** thì 403. Chuyện đó chỉ xảy ra khi phòng đang `WAITING`, có ván cũ đã kết thúc, và người gọi mới vào phòng sau đó — không nằm trong luồng khôi phục ở [room.md §8](./room.md), vì lúc phòng `PLAYING` thì danh sách thành viên bị khoá.
+
+Vẫn yêu cầu người gọi là thành viên của ván (người ngoài gọi → 403).
+
+#### `GET /games/:gameId/me`
+
+```
+{
+  "userId": 3, "role": "werewolf", "isAlive": true,
+  "teammates": [7, 11],
+  "canVoteNow": true,
+  "myVoteTargetId": 5
+}
+```
+
+- `teammates` — **chỉ có với Sói**, là danh sách các Sói khác. Đây chính là phần "Sói biết nhau" được chuyển ra khỏi endpoint ván. Vai khác không có khoá này.
+- `canVoteNow` — bây giờ bấm bỏ phiếu có được không (gộp: ván đang chạy, còn sống, và nếu là đêm thì phải là Sói).
+- `myVoteTargetId` — phiếu hiện tại của chính mình trong pha đang mở, `null` nếu chưa bỏ.
+
+Khi có thêm vai đặc biệt thì mỗi vai thêm đúng một khoá của riêng mình vào đây, và khoá đó **chỉ được dựng khi người gọi đúng là vai đó** — xem [role-tien-tri.md §6.4](./role-tien-tri.md).
+
+#### Ảnh hưởng tới client
+
+Đây là **thay đổi phá vỡ tương thích** với endpoint đang chạy:
+
+1. `myRole` biến mất khỏi `/games/room/:roomId` → chuyển sang `/games/:gameId/me`.
+2. Sói không còn thấy `role: "werewolf"` của đồng đội trong `players[]` → phải đọc `teammates` từ `/me` rồi tự ghép ở client.
+3. Client cần `gameId` trước khi gọi `/me`. Lấy từ trường `id` của endpoint ván — lần đầu phải gọi tuần tự, sau đó nhớ lại là được.
+4. Vòng poll giờ gọi 2 endpoint thay vì 1.
 
 ### 9.3. Điều kiện thắng
 

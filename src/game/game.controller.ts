@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { GameService } from './game.service';
 import { CastVoteDto } from './dto/cast-vote.dto';
+import { SeerCheckDto } from './dto/seer-check.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 
@@ -55,5 +56,26 @@ export class GameController {
     @Param('gameId', ParseIntPipe) gameId: number,
   ) {
     return this.gameService.getVoteTally(gameId, user.id);
+  }
+
+  // Tiên tri soi 1 người trong đêm hiện tại. Mỗi đêm đúng 1 lượt, gọi rồi thì không đổi
+  // được nữa (khác bỏ phiếu) — xem docs/role-tien-tri.md §2.
+  @Post(':gameId/seer/check')
+  @HttpCode(HttpStatus.OK)
+  seerCheck(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+    @Body() dto: SeerCheckDto,
+  ) {
+    return this.gameService.seerCheck(gameId, user.id, dto.targetUserId);
+  }
+
+  // Lịch sử soi của chính người gọi, từ đầu ván.
+  @Get(':gameId/seer/checks')
+  getMySeerChecks(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getMySeerChecks(gameId, user.id);
   }
 }

@@ -70,6 +70,7 @@ Entity `User`: `id`, `name`, `username` (unique), `email` (unique), `address`, `
 | Chức năng | Endpoint | Trạng thái |
 |---|---|---|
 | Danh sách phòng đang chờ (phân trang) | `GET /rooms?page=&limit=` | ✅ Xong |
+| Phòng mà tôi đang ở (khôi phục sau reload) | `GET /rooms/me` | ✅ Xong |
 | Chi tiết phòng + danh sách thành viên | `GET /rooms/:id` | ✅ Xong |
 | Tạo phòng | `POST /rooms` | ✅ Xong |
 | Vào phòng bằng mã | `POST /rooms/join` | ✅ Xong |
@@ -96,8 +97,11 @@ Chi tiết đã làm:
 | Chức năng | Endpoint | Trạng thái |
 |---|---|---|
 | Xem trạng thái ván theo phòng | `GET /games/room/:roomId` | ✅ Xong |
+| Xem thông tin của chính mình trong ván | `GET /games/:gameId/me` | ✅ Xong |
 | Bỏ phiếu / đổi phiếu | `POST /games/:gameId/vote` | ✅ Xong |
 | Xem kiểm phiếu lượt hiện tại | `GET /games/:gameId/votes` | ✅ Xong |
+| Tiên tri soi 1 người trong đêm | `POST /games/:gameId/seer/check` | ✅ Xong |
+| Lịch sử soi của chính mình | `GET /games/:gameId/seer/checks` | ✅ Xong |
 
 Thiết kế kỹ thuật: [docs/game-rounds.md](./docs/game-rounds.md). Luật gốc: [docs/game-rules.md](./docs/game-rules.md).
 
@@ -132,16 +136,18 @@ Một ván có 3 trạng thái:
 
 ### 5.2. Vai trò và phe
 
-Hiện có **2 vai**, chia ngẫu nhiên đều lúc bắt đầu và **cố định suốt ván**:
+Hiện có **3 vai**, chia ngẫu nhiên đều lúc bắt đầu và **cố định suốt ván**:
 
-| Số người | Sói | Dân |
-|---|---|---|
-| 6 | 1 | 5 |
-| 8 | 2 | 6 |
-| 10 | 2 | 8 |
-| 15 | 3 | 12 |
+| Số người | Sói | Dân thường | Tiên tri |
+|---|---|---|---|
+| 6 | 1 | 4 | 1 |
+| 8 | 2 | 5 | 1 |
+| 10 | 2 | 7 | 1 |
+| 15 | 3 | 11 | 1 |
 
 Hai phe: **phe Sói** và **phe Dân**. Mọi vai không phải Sói đều thuộc phe Dân. Sói biết nhau ngay từ đầu; Dân không biết ai là ai.
+
+**Tiên tri** thuộc phe Dân. Mỗi đêm được soi đúng **1 người** để biết người đó **có phải Sói hay không** — chỉ nhị phân, không biết vai cụ thể. Kết quả chỉ mình Tiên tri thấy, và **không rút lại hay đổi mục tiêu được** (khác bỏ phiếu: vừa gọi là đã biết đáp án). Không được tự soi mình, không soi người đã chết. Xem [docs/role-tien-tri.md](./docs/role-tien-tri.md).
 
 ### 5.3. Cấu trúc một lượt
 
@@ -203,15 +209,22 @@ Chưa có kết quả hoà và chưa có phe thứ ba (dành cho vai Người đ
 
 ### 5.7. Thông tin mỗi người được nhìn thấy
 
-Vai trò là bí mật. Một người **chỉ** biết được vai của người khác trong các trường hợp:
+Vai trò là bí mật. Thông tin được chia làm hai nhóm rạch ròi, tương ứng hai endpoint riêng biệt (xem [game.md §9.2](./docs/game.md)):
+
+**Nhóm 1 — trạng thái ván, ai trong ván cũng thấy như nhau:** pha hiện tại, số thứ tự lượt, thời điểm pha kết thúc để đếm ngược, danh sách người chơi kèm còn sống hay đã chết, và phe thắng khi ván xong.
+
+Trong nhóm này, vai trò chỉ hiện khi **khách quan đã công khai**:
 
 | Trường hợp | Vì sao |
 |---|---|
-| Người đó đã chết | Vai được công khai lúc chết |
+| Người đó đã chết | Vai được công khai lúc chết, cho **tất cả mọi người** thấy như nhau |
 | Ván đã kết thúc | Công khai toàn bộ để tổng kết |
-| Người xem là Sói và người được xem cũng là Sói | Sói biết đồng đội của mình |
 
-Ngoài ra ai cũng luôn thấy: vai của **chính mình**, danh sách người chơi kèm **còn sống hay đã chết**, pha hiện tại, số thứ tự lượt, và **thời điểm pha hiện tại kết thúc** để đếm ngược.
+> Điều kiện "đã chết" xét trên **người đang được liệt kê**, không phải người đang xem. Một người chết đi thì vai của *họ* lộ ra cho cả làng — chứ *họ* không vì thế mà nhìn thấy vai của những người còn sống.
+
+**Nhóm 2 — thông tin riêng của từng người, mỗi người thấy một kiểu:** vai của chính mình, danh sách đồng đội (chỉ Sói mới có — đây là phần "Sói biết nhau"), phiếu mình đang bỏ, và trạng thái kỹ năng riêng nếu có vai đặc biệt.
+
+Tách như vậy để endpoint trạng thái ván **hoàn toàn không phụ thuộc người xem** — hai người cùng ván gọi lên nhận phản hồi y hệt nhau. Nhờ đó việc rà soát rò rỉ bí mật chỉ còn gói gọn ở đúng một chỗ, thay vì phải soi từng trường trong một phản hồi trộn lẫn.
 
 ### 5.8. Nhịp chuyển pha
 
@@ -235,7 +248,7 @@ Nếu sau này muốn làm "bang hội / nhóm bạn bè" thì viết mới theo
 |---|---|---|
 | Realtime (WebSocket / SSE) | Hiện client phải poll `GET /games/room/:roomId` để biết pha đổi | Chưa cần |
 | **Nợ kỹ thuật — ván đứng khi restart** | Xem §9 bên dưới | Chấp nhận, xử lý sau |
-| Vai trò đặc biệt | Tạm rút còn 2 vai (`werewolf`, `villager`). `seer`, `guard`, `witch`, `hunter`, `fool` bỏ khỏi bảng chia vai, nâng cấp sau | Chưa làm |
+| Vai trò đặc biệt | Đã có Tiên tri (`seer`). Còn `guard`, `witch`, `hunter`, `fool` — xem [luat-choi.md §9](./docs/luat-choi.md) về thứ tự nên thêm | Đang làm dần |
 | Chat trong phòng | Chưa có | Chưa làm |
 | Lịch sử ván đấu / thống kê | Chưa có bảng `game_history` | Chưa làm |
 | Role admin | Chưa có cột `role`; `GET /users` đang lộ email/address của mọi người | Tạm để đó, làm sau |

@@ -199,3 +199,45 @@ Cách chia REST (ghi) + WebSocket (broadcast đọc) giúp giữ nguyên style R
 - Phòng riêng tư có mật khẩu.
 - Ghế ngồi cố định (seat index) thay vì danh sách member không thứ tự — hữu ích nếu UI hiển thị bàn tròn.
 - Lưu lịch sử ván chơi (`game_history`) để thống kê thắng/thua — nên tách bảng riêng ở `GameModule`, không nhét vào `rooms`.
+
+---
+
+## 8. Khôi phục trạng thái sau khi client tải lại trang
+
+Sau khi người chơi F5 hoặc mở lại app, client **không còn nhớ** mình đang ở phòng nào, ván nào. Không có endpoint nào trả lời được câu "tôi đang ở đâu" nếu chỉ dựa vào `GET /rooms` (chỉ liệt kê phòng đang chờ) hay `GET /rooms/:id` (phải biết id trước).
+
+`GET /rooms/me` lấp chỗ đó. Nó luôn trả tối đa **một** phòng, vì `createRoom()` và `joinRoom()` đều chặn user đang ở phòng khác — mỗi user chỉ thuộc đúng một phòng tại một thời điểm.
+
+```
+{ "room": null }                      ← không ở phòng nào, hiện màn hình sảnh
+{ "room": { id, code, hostId, status, maxPlayers, members: [...] } }
+```
+
+### Luồng khôi phục
+
+```
+GET /rooms/me
+   │
+   ├── room = null ─────────────► màn hình sảnh (tạo phòng / nhập mã)
+   │
+   ├── room.status = WAITING ───► màn hình chờ trong phòng
+   │
+   └── room.status = PLAYING
+            │
+            ▼
+       GET /games/room/{room.id}      → { game: {...} }, lấy game.id
+            │
+            ▼
+       GET /games/{gameId}/me         → vai của mình, đồng đội, làm được gì lúc này
+            │
+            ▼
+       vào thẳng màn hình chơi, đếm ngược theo `phaseEndsAt`
+```
+
+Nếu phòng chưa chơi ván nào thì `GET /games/room/:roomId` trả `{ "game": null }` với mã 200, không phải 404 — client cứ gọi mà không cần bắt lỗi.
+
+Vì `phaseEndsAt` được lưu trong DB nên đồng hồ đếm ngược khôi phục chính xác — người chơi quay lại đúng thời điểm còn lại của pha, không bị reset.
+
+`gameId` **không** trả kèm trong `GET /rooms/me`: `RoomsModule` cố ý không phụ thuộc `GameModule` (xem [game.md §2](./game.md)), nên client lấy nó từ trường `id` của `GET /games/room/:roomId`. Đằng nào client cũng phải gọi endpoint đó để lấy pha hiện tại.
+
+> Route `GET /rooms/me` phải khai báo **trước** `GET /rooms/:id` trong controller. Ngược lại thì `/rooms/me` sẽ khớp vào `:id`, rồi `ParseIntPipe` ném 400 vì `me` không phải số.

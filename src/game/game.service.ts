@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -17,7 +18,9 @@ import {
 } from './entities/game.entity';
 import { GamePlayer } from './entities/game-player.entity';
 import { GameVote } from './entities/game-vote.entity';
-import { WEREWOLF_ROLES } from './constants/factions';
+import { GameAction } from './entities/game-action.entity';
+import { GameActionType, SeerCheckResult } from './constants/actions';
+import { SEER_ROLE, WEREWOLF_ROLES } from './constants/factions';
 import {
   ROLE_CONFIG_BY_MAX_PLAYERS,
   MaxPlayers,
@@ -45,6 +48,8 @@ export class GameService {
     private readonly playersRepo: Repository<GamePlayer>,
     @InjectRepository(GameVote)
     private readonly votesRepo: Repository<GameVote>,
+    @InjectRepository(GameAction)
+    private readonly actionsRepo: Repository<GameAction>,
     private readonly eventEmitter: EventEmitter2,
     private readonly schedulerRegistry: SchedulerRegistry,
   ) {}
@@ -188,16 +193,37 @@ export class GameService {
       myVoteTargetId: myVote?.targetId ?? null,
     };
 
-    if (!WEREWOLF_ROLES.includes(me.role)) return base;
-
     // Sói biết nhau từ đầu ván, kể cả đồng đội đã chết — cái biết đó không mất đi.
-    // Vai khác gọi endpoint này thì không có khoá `teammates` nào cả.
-    return {
-      ...base,
-      teammates: players
-        .filter((p) => p.userId !== userId && WEREWOLF_ROLES.includes(p.role))
-        .map((p) => p.userId),
-    };
+    if (WEREWOLF_ROLES.includes(me.role)) {
+      return {
+        ...base,
+        teammates: players
+          .filter((p) => p.userId !== userId && WEREWOLF_ROLES.includes(p.role))
+          .map((p) => p.userId),
+      };
+    }
+
+    // Tiên tri cần biết TRƯỚC khi bấm là đêm nay còn quyền soi không, và nếu soi rồi thì
+    // kết quả là gì (để F5 hay đổi máy không mất thông tin). Xem docs/role-tien-tri.md §6.4.
+    if (me.role === SEER_ROLE) {
+      const check = await this.findSeerCheck(gameId, game.dayNumber, userId);
+      return {
+        ...base,
+        seer: {
+          canCheckNow: this.canSeerCheckNow(game, me) && !check,
+          checkedThisNight: check
+            ? {
+                targetUserId: check.targetId,
+                isWerewolf: check.result === SeerCheckResult.WEREWOLF,
+              }
+            : null,
+        },
+      };
+    }
+
+    // Vai khác không có khoá `teammates` lẫn `seer` — kể cả rỗng, vì sự tồn tại của khoá
+    // cũng đã là một tín hiệu rò rỉ.
+    return base;
   }
 
   /** Bây giờ bấm bỏ phiếu có được không — cùng bộ điều kiện castVote() kiểm tra. */
@@ -208,6 +234,126 @@ export class GameService {
       return false;
     }
     return true;
+  }
+
+  /**
+   * Tiên tri soi 1 người trong đêm hiện tại, biết người đó có phải Sói hay không.
+   * Ghi một lần, KHÔNG sửa được — xem docs/role-tien-tri.md §2.
+   */
+  async seerCheck(gameId: number, actorId: number, targetUserId: number) {
+    const game = await this.gamesRepo.findOneBy({ id: gameId });
+    if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
+    if (game.status !== GameStatus.IN_PROGRESS) {
+      throw new ConflictException('Ván chơi đã kết thúc');
+    }
+    if (game.phase !== GamePhase.NIGHT) {
+      throw new ConflictException(
+        'Nhà tiên tri chỉ được dùng chức năng vào ban đêm',
+      );
+    }
+
+    const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
+    if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
+    if (actor.role !== SEER_ROLE) {
+      throw new ForbiddenException('Chỉ Tiên tri mới dùng được kỹ năng này');
+    }
+    if (!actor.isAlive) {
+      throw new ForbiddenException('Bạn đã chết, không thể soi');
+    }
+
+    // Tầng chặn 1: hỏi trước cho thông báo dễ hiểu. Tầng 2 là ràng buộc UNIQUE bên dưới,
+    // bịt khe hở giữa lúc kiểm tra và lúc ghi — xem docs/role-tien-tri.md §4.5.
+    if (await this.findSeerCheck(gameId, game.dayNumber, actorId)) {
+      throw new ConflictException('Đêm nay bạn đã dùng lượt kĩ năng rồi');
+    }
+
+    if (targetUserId === actorId) {
+      throw new BadRequestException('Không thể tự soi chính mình');
+    }
+
+    const target = await this.playersRepo.findOneBy({
+      gameId,
+      userId: targetUserId,
+    });
+    if (!target) throw new NotFoundException('Người chơi không thuộc ván này');
+    if (!target.isAlive) {
+      throw new ConflictException('Không thể xem người đã chết');
+    }
+
+    // Chỉ nhị phân — không lộ tên vai cụ thể.
+    const isWerewolf = WEREWOLF_ROLES.includes(target.role);
+
+    try {
+      await this.actionsRepo.insert({
+        gameId,
+        dayNumber: game.dayNumber,
+        actionType: GameActionType.SEER_CHECK,
+        actorId,
+        targetId: targetUserId,
+        result: isWerewolf
+          ? SeerCheckResult.WEREWOLF
+          : SeerCheckResult.NOT_WEREWOLF,
+      });
+    } catch (err) {
+      // Tầng chặn 2: 2 request song song cùng vượt qua tầng 1 rồi cùng ghi.
+      if (this.isUniqueViolation(err)) {
+        throw new ConflictException('Đêm nay bạn đã dùng lượt soi rồi');
+      }
+      throw err;
+    }
+
+    return { dayNumber: game.dayNumber, targetUserId, isWerewolf };
+  }
+
+  /**
+   * Lịch sử soi của CHÍNH người gọi từ đầu ván. Luôn lọc theo danh tính lấy từ access token,
+   * không bao giờ theo tham số client gửi lên — xem docs/role-tien-tri.md §7.
+   */
+  async getMySeerChecks(gameId: number, actorId: number) {
+    const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
+    if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
+    if (actor.role !== SEER_ROLE) {
+      throw new ForbiddenException('Chỉ Tiên tri mới xem được lịch sử soi');
+    }
+
+    const checks = await this.actionsRepo.find({
+      where: { gameId, actionType: GameActionType.SEER_CHECK, actorId },
+      order: { dayNumber: 'ASC' },
+    });
+
+    return {
+      checks: checks.map((c) => ({
+        dayNumber: c.dayNumber,
+        targetUserId: c.targetId,
+        isWerewolf: c.result === SeerCheckResult.WEREWOLF,
+      })),
+    };
+  }
+
+  private findSeerCheck(
+    gameId: number,
+    dayNumber: number,
+    actorId: number,
+  ): Promise<GameAction | null> {
+    return this.actionsRepo.findOneBy({
+      gameId,
+      dayNumber,
+      actionType: GameActionType.SEER_CHECK,
+      actorId,
+    });
+  }
+
+  /** Điều kiện soi KHÔNG tính chuyện "đêm nay đã soi chưa" — phần đó tra riêng. */
+  private canSeerCheckNow(game: Game, me: GamePlayer): boolean {
+    return (
+      game.status === GameStatus.IN_PROGRESS &&
+      game.phase === GamePhase.NIGHT &&
+      me.isAlive
+    );
+  }
+
+  private isUniqueViolation(err: unknown): boolean {
+    return (err as { code?: string })?.code === '23505';
   }
 
   /**

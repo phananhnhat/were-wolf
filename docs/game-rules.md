@@ -24,6 +24,8 @@ Tài liệu này mô tả **luật chơi** cơ bản của Ma Sói làm cơ sở
 
 ## 3. Danh sách vai trò
 
+> Mô tả chi tiết từng vai (kỹ năng, giới hạn, các tình huống tương tác khó, thứ tự nên cài) nằm ở tài liệu riêng: [luat-choi.md](./luat-choi.md).
+
 ### 3.1. Phe Ma Sói
 
 | Vai trò | Kỹ năng đêm |
@@ -96,7 +98,18 @@ Ván chơi dừng ngay khi một điều kiện thắng được thoả mãn ở
 
 ## 6. Cấu hình vai trò theo số người chơi
 
-`rooms.maxPlayers` chỉ nhận 1 trong 4 giá trị cố định (xem [room.md §1.1](./room.md)). Vai trò tương ứng mỗi mốc được định nghĩa tĩnh trong code ở `ROLE_CONFIG_BY_MAX_PLAYERS` (`src/rooms/constants/room-configs.ts`), không lưu DB:
+`rooms.maxPlayers` chỉ nhận 1 trong 4 giá trị cố định (xem [room.md §1.1](./room.md)). Vai trò tương ứng mỗi mốc được định nghĩa tĩnh trong code ở `ROLE_CONFIG_BY_MAX_PLAYERS` (`src/rooms/constants/room-configs.ts`), không lưu DB.
+
+**Đang chạy thật** — mới chỉ có 2 vai, các vai đặc biệt chưa được cài:
+
+| Số người | Vai trò |
+|---|---|
+| 6 | 1 Sói, 5 Dân thường |
+| 8 | 2 Sói, 6 Dân thường |
+| 10 | 2 Sói, 8 Dân thường |
+| 15 | 3 Sói, 12 Dân thường |
+
+**Dự kiến khi đã có đủ vai đặc biệt** (chưa cài — xem [luat-choi.md §7](./luat-choi.md) về các điều kiện tiên quyết):
 
 | Số người | Vai trò |
 |---|---|

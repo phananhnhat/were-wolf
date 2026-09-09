@@ -18,6 +18,7 @@ import { RoomMember } from './rooms/entities/room-member.entity';
 import { Game } from './game/entities/game.entity';
 import { GamePlayer } from './game/entities/game-player.entity';
 import { GameVote } from './game/entities/game-vote.entity';
+import { GameAction } from './game/entities/game-action.entity';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { GameVote } from './game/entities/game-vote.entity';
           Game,
           GamePlayer,
           GameVote,
+          GameAction,
         ],
         synchronize: true, // tắt khi lên production
       }),
