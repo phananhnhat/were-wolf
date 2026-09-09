@@ -17,12 +17,23 @@ import { User } from '../users/entities/user.entity';
 export class GameController {
   constructor(private readonly gameService: GameService) {}
 
+  // Trạng thái ván — giống hệt nhau với mọi người trong ván, không chứa gì riêng tư.
   @Get('room/:roomId')
   findByRoom(
     @CurrentUser() user: User,
     @Param('roomId', ParseIntPipe) roomId: number,
   ) {
-    return this.gameService.getGameStateForUser(roomId, user.id);
+    return this.gameService.getGameState(roomId, user.id);
+  }
+
+  // Thông tin riêng của người gọi (vai, đồng đội Sói, làm được gì lúc này). Tách khỏi
+  // endpoint trên để endpoint đó không phụ thuộc người xem — xem docs/game.md §9.2.
+  @Get(':gameId/me')
+  findMyState(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getMyState(gameId, user.id);
   }
 
   // NIGHT: chỉ Sói còn sống gọi được (chọn nạn nhân). DAY: ai còn sống cũng gọi được

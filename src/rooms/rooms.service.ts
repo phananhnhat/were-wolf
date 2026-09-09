@@ -58,6 +58,19 @@ export class RoomsService {
     };
   }
 
+  /**
+   * Phòng mà user đang ở, hoặc null nếu không ở phòng nào. Dùng để khôi phục trạng thái sau
+   * khi client tải lại trang — lúc đó client không còn nhớ roomId nào cả.
+   *
+   * Luôn trả tối đa 1 phòng: cả createRoom() lẫn joinRoom() đều chặn user đang ở phòng khác,
+   * nên mỗi user chỉ thuộc đúng một phòng tại một thời điểm.
+   */
+  async findMyRoom(userId: number) {
+    const member = await this.membersRepo.findOneBy({ userId });
+    if (!member) return { room: null };
+    return { room: await this.findRoomDetail(member.roomId, userId) };
+  }
+
   async findRoomDetail(roomId: number, userId: number) {
     const room = await this.roomsRepo.findOneBy({ id: roomId });
     if (!room) throw new NotFoundException('Không tìm thấy phòng');

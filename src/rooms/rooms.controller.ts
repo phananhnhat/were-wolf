@@ -29,6 +29,13 @@ export class RoomsController {
     );
   }
 
+  // Phải khai báo TRƯỚC @Get(':id') — nếu không '/rooms/me' sẽ khớp vào :id rồi
+  // ParseIntPipe ném 400 vì 'me' không phải số.
+  @Get('me')
+  findMine(@CurrentUser() user: User) {
+    return this.roomsService.findMyRoom(user.id);
+  }
+
   @Get(':id')
   findOne(@CurrentUser() user: User, @Param('id', ParseIntPipe) id: number) {
     return this.roomsService.findRoomDetail(id, user.id);

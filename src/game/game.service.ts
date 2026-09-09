@@ -63,6 +63,7 @@ export class GameService {
     }
 
     try {
+      // Tạo record game chơi
       const game = await this.gamesRepo.save(
         this.gamesRepo.create({
           roomId: payload.roomId,
@@ -115,36 +116,98 @@ export class GameService {
     );
   }
 
-  async getGameStateForUser(roomId: number, userId: number) {
+  /**
+   * Trạng thái ván. Cố ý **không phụ thuộc người xem**: hai người trong cùng một ván gọi lên
+   * sẽ nhận phản hồi y hệt nhau. Mọi thứ riêng tư (vai của mình, đồng đội Sói, kỹ năng) nằm
+   * ở getMyState(). Nhờ tách như vậy, việc rà soát rò rỉ bí mật chỉ gói gọn ở một chỗ
+   */
+  async getGameState(roomId: number, userId: number) {
     const game = await this.gamesRepo.findOne({
       where: { roomId },
       order: { startedAt: 'DESC' },
     });
-    if (!game) throw new NotFoundException('Phòng chưa có ván chơi nào');
+    // Phòng chưa chơi ván nào không phải lỗi — đó là trạng thái bình thường của phòng đang
+    // chờ. Trả { game: null }
+    if (!game) return { game: null };
 
     const players = await this.playersRepo.find({
       where: { gameId: game.id },
     });
+    if (!players.some((p) => p.userId === userId)) {
+      throw new ForbiddenException('Bạn không thuộc ván chơi này');
+    }
+
+    const isFinished = game.status !== GameStatus.IN_PROGRESS;
+
+    return {
+      game: {
+        id: game.id,
+        roomId: game.roomId,
+        status: game.status,
+        phase: game.phase,
+        dayNumber: game.dayNumber,
+        phaseEndsAt: game.phaseEndsAt,
+        winner: game.winner,
+        // Lộ vai khi CHÍNH NGƯỜI ĐÓ đã chết, hoặc khi ván đã kết thúc — và lộ cho tất cả
+        // mọi người như nhau. Người xem đã chết KHÔNG vì thế mà thấy được vai của người
+        // còn sống. "Sói nhìn thấy Sói" nằm ở getMyState() dưới dạng danh sách đồng đội.
+        players: players.map((p) => ({
+          userId: p.userId,
+          isAlive: p.isAlive,
+          role: !p.isAlive || isFinished ? p.role : null,
+        })),
+      },
+    };
+  }
+
+  /**
+   * Thông tin riêng của người gọi trong một ván: vai của mình, đồng đội (chỉ Sói mới có),
+   * và hiện tại làm được gì. Đây là chỗ duy nhất trả dữ liệu bí mật, và danh tính luôn lấy
+   * từ access token chứ không từ tham số client gửi lên.
+   */
+  async getMyState(gameId: number, userId: number) {
+    const game = await this.gamesRepo.findOneBy({ id: gameId });
+    if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
+
+    const players = await this.playersRepo.find({ where: { gameId } });
     const me = players.find((p) => p.userId === userId);
     if (!me) throw new ForbiddenException('Bạn không thuộc ván chơi này');
 
-    const isFinished = game.status !== GameStatus.IN_PROGRESS;
-    const iAmWerewolf = WEREWOLF_ROLES.includes(me.role);
-
-    return {
-      id: game.id,
-      status: game.status,
+    const myVote = await this.votesRepo.findOneBy({
+      gameId,
       phase: game.phase,
       dayNumber: game.dayNumber,
-      phaseEndsAt: game.phaseEndsAt,
-      winner: game.winner,
-      myRole: me.role,
-      players: players.map((p) => ({
-        userId: p.userId,
-        isAlive: p.isAlive,
-        role: this.revealRoleIfAllowed(p, isFinished, iAmWerewolf),
-      })),
+      voterId: userId,
+    });
+
+    const base = {
+      userId: me.userId,
+      role: me.role,
+      isAlive: me.isAlive,
+      canVoteNow: this.canVoteNow(game, me),
+      myVoteTargetId: myVote?.targetId ?? null,
     };
+
+    if (!WEREWOLF_ROLES.includes(me.role)) return base;
+
+    // Sói biết nhau từ đầu ván, kể cả đồng đội đã chết — cái biết đó không mất đi.
+    // Vai khác gọi endpoint này thì không có khoá `teammates` nào cả.
+    return {
+      ...base,
+      teammates: players
+        .filter((p) => p.userId !== userId && WEREWOLF_ROLES.includes(p.role))
+        .map((p) => p.userId),
+    };
+  }
+
+  /** Bây giờ bấm bỏ phiếu có được không — cùng bộ điều kiện castVote() kiểm tra. */
+  private canVoteNow(game: Game, me: GamePlayer): boolean {
+    if (game.status !== GameStatus.IN_PROGRESS) return false;
+    if (!me.isAlive) return false;
+    if (game.phase === GamePhase.NIGHT && !WEREWOLF_ROLES.includes(me.role)) {
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -168,7 +231,7 @@ export class GameService {
       game.phase === GamePhase.NIGHT &&
       !WEREWOLF_ROLES.includes(voter.role)
     ) {
-      throw new ForbiddenException('Chỉ Ma Sói được chọn nạn nhân ban đêm');
+      throw new ForbiddenException('Chỉ Sói được chọn nạn nhân ban đêm');
     }
 
     const target = await this.playersRepo.findOneBy({
@@ -330,18 +393,6 @@ export class GameService {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game) return;
     this.eventEmitter.emit('game.finished', { roomId: game.roomId });
-  }
-
-  private revealRoleIfAllowed(
-    player: GamePlayer,
-    isFinished: boolean,
-    iAmWerewolf: boolean,
-  ): string | undefined {
-    const canReveal =
-      !player.isAlive ||
-      isFinished ||
-      (iAmWerewolf && WEREWOLF_ROLES.includes(player.role));
-    return canReveal ? player.role : undefined;
   }
 
   private buildShuffledRoles(maxPlayers: number): string[] {
