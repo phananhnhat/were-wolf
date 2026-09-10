@@ -71,6 +71,8 @@ export class GameController {
     return this.gameService.seerCheck(gameId, user.id, dto.targetUserId);
   }
 
+  // Bảo vệ che 1 người trong đêm nay. Không được tự che mình, không được che trùng người
+  // 2 đêm liên tiếp. Không trả về thông tin gì của mục tiêu — xem docs/role-bao-ve.md.
   @Post(':gameId/guardian/protect')
   @HttpCode(HttpStatus.OK)
   guardianProtect(
@@ -78,7 +80,16 @@ export class GameController {
     @Param('gameId', ParseIntPipe) gameId: number,
     @Body() dto: GuardianProtectDto,
   ) {
-    return this.gameService.seerCheck(gameId, user.id, dto.targetUserId);
+    return this.gameService.guardianProtect(gameId, user.id, dto.targetUserId);
+  }
+
+  // Lịch sử che của chính người gọi, từ đầu ván.
+  @Get(':gameId/guardian/protects')
+  getMyGuardianProtects(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getMyGuardianProtects(gameId, user.id);
   }
 
   // Lịch sử soi của chính người gọi, từ đầu ván.

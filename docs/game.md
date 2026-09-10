@@ -26,7 +26,7 @@ Tài liệu này chỉ thiết kế phần **khởi tạo và kết thúc một 
 | `id` | serial PK | |
 | `gameId` | FK → `games.id`, `ON DELETE CASCADE` | |
 | `userId` | FK → `users.id` | |
-| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Hiện có `werewolf`, `villager`, `seer` |
+| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Hiện có `werewolf`, `villager`, `seer`, `guardian` |
 | `isAlive` | boolean, default true | |
 
 Ràng buộc: `UNIQUE(gameId, userId)`.
@@ -154,6 +154,8 @@ Không còn pha thảo luận riêng: cả làng bàn bạc ngay trong 60 giây 
 | `GET` | `/games/:gameId/votes` | Kiểm phiếu hiện tại của pha đang mở. `NIGHT` chỉ Sói xem được (bàn bạc kín, thấy phiếu đổi real-time qua polling); `DAY` ai cũng xem được (công khai) |
 | `POST` | `/games/:gameId/seer/check` | Body `{ targetUserId }`. Tiên tri soi 1 người trong đêm hiện tại — mỗi đêm 1 lượt, ghi rồi không sửa được |
 | `GET` | `/games/:gameId/seer/checks` | Lịch sử soi của chính người gọi. Chỉ Tiên tri đọc được, lọc theo danh tính từ access token |
+| `POST` | `/games/:gameId/guardian/protect` | Body `{ targetUserId }`. Bảo vệ che 1 người khỏi bị Sói cắn đêm nay. Không tự che mình, không trùng 2 đêm liên tiếp |
+| `GET` | `/games/:gameId/guardian/protects` | Lịch sử che của chính người gọi. Chỉ Bảo vệ đọc được |
 
 Bảng `game_votes` lưu 1 dòng/người/lượt (`UNIQUE(gameId, phase, dayNumber, voterId)`) — đổi phiếu là `UPDATE`, không tạo dòng mới, nên kiểm phiếu luôn tính đúng phiếu gần nhất.
 

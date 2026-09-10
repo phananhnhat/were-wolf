@@ -210,7 +210,7 @@ export class GameService {
       return {
         ...base,
         seer: {
-          canCheckNow: this.canSeerCheckNow(game, me) && !check,
+          canCheckNow: this.canUseNightSkillNow(game, me) && !check,
           checkedThisNight: check
             ? {
                 targetUserId: check.targetId,
@@ -221,8 +221,29 @@ export class GameService {
       };
     }
 
-    // Vai khác không có khoá `teammates` lẫn `seer` — kể cả rỗng, vì sự tồn tại của khoá
-    // cũng đã là một tín hiệu rò rỉ.
+    // Bảo vệ cần biết trước: đêm nay còn quyền che không, đã che ai, và ai đang bị cấm
+    // vì mới che đêm trước. Không có thông tin nào ở đây là bí mật của người khác —
+    // Bảo vệ vốn đã tự biết mình che ai.
+    if (me.role === GUARDIAN_ROLE) {
+      const [tonight, lastNight] = await Promise.all([
+        this.findGuardianProtect(gameId, game.dayNumber, userId),
+        this.findLastNightProtect(gameId, game.dayNumber, userId),
+      ]);
+      return {
+        ...base,
+        guardian: {
+          canProtectNow: this.canUseNightSkillNow(game, me) && !tonight,
+          protectedThisNight: tonight
+            ? { targetUserId: tonight.targetId }
+            : null,
+          // Người không được chọn đêm nay vì đã che đêm trước — client tô mờ đi
+          blockedTargetUserId: lastNight?.targetId ?? null,
+        },
+      };
+    }
+
+    // Vai khác không có khoá `teammates`, `seer` lẫn `guardian` — kể cả rỗng, vì sự tồn tại
+    // của khoá cũng đã là một tín hiệu rò rỉ.
     return base;
   }
 
@@ -241,44 +262,19 @@ export class GameService {
    * Ghi một lần, KHÔNG sửa được — xem docs/role-tien-tri.md §2.
    */
   async seerCheck(gameId: number, actorId: number, targetUserId: number) {
-    const game = await this.gamesRepo.findOneBy({ id: gameId });
-    if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
-    if (game.status !== GameStatus.IN_PROGRESS) {
-      throw new ConflictException('Ván chơi đã kết thúc');
-    }
-    if (game.phase !== GamePhase.NIGHT) {
-      throw new ConflictException(
-        'Nhà tiên tri chỉ được dùng chức năng vào ban đêm',
-      );
-    }
-
-    const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
-    if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
-    if (actor.role !== SEER_ROLE) {
-      throw new ForbiddenException('Chỉ Tiên tri mới dùng được kỹ năng này');
-    }
-    if (!actor.isAlive) {
-      throw new ForbiddenException('Bạn đã chết, không thể soi');
-    }
-
-    // Tầng chặn 1: hỏi trước cho thông báo dễ hiểu. Tầng 2 là ràng buộc UNIQUE bên dưới,
-    // bịt khe hở giữa lúc kiểm tra và lúc ghi — xem docs/role-tien-tri.md §4.5.
-    if (await this.findSeerCheck(gameId, game.dayNumber, actorId)) {
-      throw new ConflictException('Đêm nay bạn đã dùng lượt kĩ năng rồi');
-    }
+    const { game } = await this.assertCanUseNightSkill(
+      gameId,
+      actorId,
+      SEER_ROLE,
+      GameActionType.SEER_CHECK,
+      'Tiên tri',
+    );
 
     if (targetUserId === actorId) {
       throw new BadRequestException('Không thể tự soi chính mình');
     }
 
-    const target = await this.playersRepo.findOneBy({
-      gameId,
-      userId: targetUserId,
-    });
-    if (!target) throw new NotFoundException('Người chơi không thuộc ván này');
-    if (!target.isAlive) {
-      throw new ConflictException('Không thể xem người đã chết');
-    }
+    const target = await this.assertLivingTarget(gameId, targetUserId);
 
     // Chỉ nhị phân — không lộ tên vai cụ thể.
     const isWerewolf = WEREWOLF_ROLES.includes(target.role);
@@ -305,68 +301,160 @@ export class GameService {
     return { dayNumber: game.dayNumber, targetUserId, isWerewolf };
   }
 
+  /**
+   * Bảo vệ chọn 1 người để che trong đêm nay. Nếu Sói cắn đúng người đó thì không ai chết.
+   * Bảo vệ KHÔNG biết mình có che trúng hay không — biết được tức là biết luôn Sói nhắm ai.
+   * Xem docs/role-bao-ve.md.
+   */
   async guardianProtect(gameId: number, actorId: number, targetUserId: number) {
+    const { game } = await this.assertCanUseNightSkill(
+      gameId,
+      actorId,
+      GUARDIAN_ROLE,
+      GameActionType.GUARDIAN_PROTECT,
+      'Bảo vệ',
+    );
+
+    if (targetUserId === actorId) {
+      throw new BadRequestException('Không thể tự bảo vệ chính mình');
+    }
+
+    // Không được che cùng một người 2 đêm liên tiếp — thiếu luật này thì Bảo vệ khoá cứng
+    // được một người và phe Sói gần như không thể thắng.
+    const lastNight = await this.findLastNightProtect(
+      gameId,
+      game.dayNumber,
+      actorId,
+    );
+    if (lastNight?.targetId === targetUserId) {
+      throw new BadRequestException(
+        'Đêm trước bạn đã bảo vệ người này, không được chọn lại 2 đêm liên tiếp',
+      );
+    }
+
+    await this.assertLivingTarget(gameId, targetUserId);
+
+    try {
+      await this.actionsRepo.insert({
+        gameId,
+        dayNumber: game.dayNumber,
+        actionType: GameActionType.GUARDIAN_PROTECT,
+        actorId,
+        targetId: targetUserId,
+        // Không có kết quả trả về: che trúng hay trượt đều không được báo.
+        result: null,
+      });
+    } catch (err) {
+      if (this.isUniqueViolation(err)) {
+        throw new ConflictException('Đêm nay bạn đã dùng kỹ năng rồi');
+      }
+      throw err;
+    }
+
+    // Cố ý KHÔNG trả bất cứ thông tin gì về mục tiêu (vai, phe, có bị nhắm không).
+    return { dayNumber: game.dayNumber, targetUserId };
+  }
+
+  /** Lịch sử che của chính người gọi, từ đầu ván. */
+  async getMyGuardianProtects(gameId: number, actorId: number) {
+    const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
+    if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
+    if (actor.role !== GUARDIAN_ROLE) {
+      throw new ForbiddenException('Chỉ Bảo vệ mới xem được lịch sử này');
+    }
+
+    const rows = await this.actionsRepo.find({
+      where: {
+        gameId,
+        actionType: GameActionType.GUARDIAN_PROTECT,
+        actorId,
+      },
+      order: { dayNumber: 'ASC' },
+    });
+
+    return {
+      protects: rows.map((r) => ({
+        dayNumber: r.dayNumber,
+        targetUserId: r.targetId,
+      })),
+    };
+  }
+
+  /**
+   * Các kiểm tra chung cho mọi kỹ năng dùng ban đêm. Tách ra dùng chung để mỗi vai mới
+   * không phải chép lại — chép rồi quên sửa chính là nguồn gốc của lỗi Bảo vệ trả về
+   * `isWerewolf` như Tiên tri.
+   */
+  private async assertCanUseNightSkill(
+    gameId: number,
+    actorId: number,
+    requiredRole: string,
+    actionType: GameActionType,
+    roleLabel: string,
+  ): Promise<{ game: Game; actor: GamePlayer }> {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
     if (game.status !== GameStatus.IN_PROGRESS) {
       throw new ConflictException('Ván chơi đã kết thúc');
     }
     if (game.phase !== GamePhase.NIGHT) {
-      throw new ConflictException('Bảo vệ chỉ được dùng chức năng vào ban đêm');
+      throw new ConflictException('Kỹ năng này chỉ dùng được vào ban đêm');
     }
 
     const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
     if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
-    if (actor.role !== GUARDIAN_ROLE) {
-      throw new ForbiddenException('Chỉ Tiên tri mới dùng được kỹ năng này');
+    if (actor.role !== requiredRole) {
+      throw new ForbiddenException(
+        `Chỉ ${roleLabel} mới dùng được kỹ năng này`,
+      );
     }
-
     if (!actor.isAlive) {
-      throw new ForbiddenException('Bạn đã chết, không thể thực hiện');
+      throw new ForbiddenException('Bạn đã chết, không thể dùng kỹ năng');
     }
 
-    // Tầng chặn 1: hỏi trước cho thông báo dễ hiểu. Tầng 2 là ràng buộc UNIQUE bên dưới,
+    // Tầng chặn 1: hỏi trước cho thông báo dễ hiểu. Tầng 2 là ràng buộc UNIQUE lúc ghi,
     // bịt khe hở giữa lúc kiểm tra và lúc ghi — xem docs/role-tien-tri.md §4.5.
-    if (await this.findGuardianProtect(gameId, game.dayNumber, actorId)) {
-      throw new ConflictException('Đêm nay bạn đã dùng lượt kĩ năng rồi');
+    if (await this.findAction(gameId, game.dayNumber, actorId, actionType)) {
+      throw new ConflictException('Đêm nay bạn đã dùng kỹ năng rồi');
     }
 
-    // if (targetUserId === actorId) {
-    //   throw new BadRequestException('Không thể tự soi chính mình');
-    // }
+    return { game, actor };
+  }
 
+  private async assertLivingTarget(
+    gameId: number,
+    targetUserId: number,
+  ): Promise<GamePlayer> {
     const target = await this.playersRepo.findOneBy({
       gameId,
       userId: targetUserId,
     });
     if (!target) throw new NotFoundException('Người chơi không thuộc ván này');
     if (!target.isAlive) {
-      throw new ConflictException('Không thể xem người đã chết');
+      throw new ConflictException('Người chơi này đã chết');
     }
+    return target;
+  }
 
-    // Chỉ nhị phân — không lộ tên vai cụ thể.
-    const isWerewolf = WEREWOLF_ROLES.includes(target.role);
+  /** Đêm nay có Bảo vệ nào che người này không (tra theo mục tiêu, không theo người che). */
+  private async isProtected(game: Game, targetId: number): Promise<boolean> {
+    const row = await this.actionsRepo.findOneBy({
+      gameId: game.id,
+      dayNumber: game.dayNumber,
+      actionType: GameActionType.GUARDIAN_PROTECT,
+      targetId,
+    });
+    return row !== null;
+  }
 
-    try {
-      await this.actionsRepo.insert({
-        gameId,
-        dayNumber: game.dayNumber,
-        actionType: GameActionType.SEER_CHECK,
-        actorId,
-        targetId: targetUserId,
-        result: isWerewolf
-          ? SeerCheckResult.WEREWOLF
-          : SeerCheckResult.NOT_WEREWOLF,
-      });
-    } catch (err) {
-      // Tầng chặn 2: 2 request song song cùng vượt qua tầng 1 rồi cùng ghi.
-      if (this.isUniqueViolation(err)) {
-        throw new ConflictException('Đêm nay bạn đã dùng lượt soi rồi');
-      }
-      throw err;
-    }
-
-    return { dayNumber: game.dayNumber, targetUserId, isWerewolf };
+  /** Lượt che của đêm ngay trước đó, để cài luật "không trùng 2 đêm liên tiếp". */
+  private findLastNightProtect(
+    gameId: number,
+    dayNumber: number,
+    actorId: number,
+  ): Promise<GameAction | null> {
+    if (dayNumber === 0) return Promise.resolve(null); // đêm đầu, chưa có đêm trước
+    return this.findGuardianProtect(gameId, dayNumber - 1, actorId);
   }
 
   /**
@@ -434,8 +522,9 @@ export class GameService {
     );
   }
 
-  /** Điều kiện soi KHÔNG tính chuyện "đêm nay đã soi chưa" — phần đó tra riêng. */
-  private canSeerCheckNow(game: Game, me: GamePlayer): boolean {
+  /** Điều kiện chung để dùng kỹ năng đêm. KHÔNG tính chuyện 'đêm nay đã dùng chưa' — phần
+   *  đó tra riêng vì mỗi vai có loại hành động khác nhau. */
+  private canUseNightSkillNow(game: Game, me: GamePlayer): boolean {
     return (
       game.status === GameStatus.IN_PROGRESS &&
       game.phase === GamePhase.NIGHT &&
@@ -578,6 +667,14 @@ export class GameService {
     });
     const targetId = this.pickUniqueMaxTarget(this.tallyByTarget(votes));
     if (targetId === null) return null;
+
+    // Bảo vệ chỉ chặn được vết cắn ban đêm, KHÔNG chặn được việc cả làng treo cổ ban ngày.
+    if (
+      game.phase === GamePhase.NIGHT &&
+      (await this.isProtected(game, targetId))
+    ) {
+      return null; // Sói cắn trúng người được che → không ai chết đêm nay
+    }
 
     const target = await this.playersRepo.findOneBy({
       gameId: game.id,

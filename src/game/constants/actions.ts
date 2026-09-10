@@ -13,6 +13,3 @@ export enum SeerCheckResult {
   WEREWOLF = 'WEREWOLF',
   NOT_WEREWOLF = 'NOT_WEREWOLF',
 }
-
-type A = (typeof GameActionType)[keyof typeof GameActionType];
-const B: A = GameActionType.SEER_CHECK;

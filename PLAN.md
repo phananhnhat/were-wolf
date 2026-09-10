@@ -102,6 +102,8 @@ Chi tiết đã làm:
 | Xem kiểm phiếu lượt hiện tại | `GET /games/:gameId/votes` | ✅ Xong |
 | Tiên tri soi 1 người trong đêm | `POST /games/:gameId/seer/check` | ✅ Xong |
 | Lịch sử soi của chính mình | `GET /games/:gameId/seer/checks` | ✅ Xong |
+| Bảo vệ che 1 người trong đêm | `POST /games/:gameId/guardian/protect` | ✅ Xong |
+| Lịch sử che của chính mình | `GET /games/:gameId/guardian/protects` | ✅ Xong |
 
 Thiết kế kỹ thuật: [docs/game-rounds.md](./docs/game-rounds.md). Luật gốc: [docs/game-rules.md](./docs/game-rules.md).
 
@@ -136,18 +138,20 @@ Một ván có 3 trạng thái:
 
 ### 5.2. Vai trò và phe
 
-Hiện có **3 vai**, chia ngẫu nhiên đều lúc bắt đầu và **cố định suốt ván**:
+Hiện có **4 vai**, chia ngẫu nhiên đều lúc bắt đầu và **cố định suốt ván**:
 
-| Số người | Sói | Dân thường | Tiên tri |
-|---|---|---|---|
-| 6 | 1 | 4 | 1 |
-| 8 | 2 | 5 | 1 |
-| 10 | 2 | 7 | 1 |
-| 15 | 3 | 11 | 1 |
+| Số người | Sói | Dân thường | Bảo vệ | Tiên tri |
+|---|---|---|---|---|
+| 6 | 1 | 4 | 1 | 0 |
+| 8 | 2 | 4 | 1 | 1 |
+| 10 | 2 | 6 | 1 | 1 |
+| 15 | 3 | 10 | 1 | 1 |
 
 Hai phe: **phe Sói** và **phe Dân**. Mọi vai không phải Sói đều thuộc phe Dân. Sói biết nhau ngay từ đầu; Dân không biết ai là ai.
 
 **Tiên tri** thuộc phe Dân. Mỗi đêm được soi đúng **1 người** để biết người đó **có phải Sói hay không** — chỉ nhị phân, không biết vai cụ thể. Kết quả chỉ mình Tiên tri thấy, và **không rút lại hay đổi mục tiêu được** (khác bỏ phiếu: vừa gọi là đã biết đáp án). Không được tự soi mình, không soi người đã chết. Xem [docs/role-tien-tri.md](./docs/role-tien-tri.md).
+
+**Bảo vệ** cũng thuộc phe Dân. Mỗi đêm chọn **1 người** để che; nếu Sói cắn đúng người đó thì không ai chết. Không được tự che mình, và **không được che trùng một người 2 đêm liên tiếp**. Che chỉ chặn được vết cắn ban đêm, **không** cứu được người bị treo cổ ban ngày. Bảo vệ không bao giờ biết mình che trúng hay trượt — biết được tức là biết luôn Sói nhắm ai. Xem [docs/role-bao-ve.md](./docs/role-bao-ve.md).
 
 ### 5.3. Cấu trúc một lượt
 
@@ -248,7 +252,7 @@ Nếu sau này muốn làm "bang hội / nhóm bạn bè" thì viết mới theo
 |---|---|---|
 | Realtime (WebSocket / SSE) | Hiện client phải poll `GET /games/room/:roomId` để biết pha đổi | Chưa cần |
 | **Nợ kỹ thuật — ván đứng khi restart** | Xem §9 bên dưới | Chấp nhận, xử lý sau |
-| Vai trò đặc biệt | Đã có Tiên tri (`seer`). Còn `guard`, `witch`, `hunter`, `fool` — xem [luat-choi.md §9](./docs/luat-choi.md) về thứ tự nên thêm | Đang làm dần |
+| Vai trò đặc biệt | Đã có Tiên tri (`seer`) và Bảo vệ (`guardian`). Còn `witch`, `hunter`, `fool` — xem [luat-choi.md §9](./docs/luat-choi.md) về thứ tự nên thêm | Đang làm dần |
 | Chat trong phòng | Chưa có | Chưa làm |
 | Lịch sử ván đấu / thống kê | Chưa có bảng `game_history` | Chưa làm |
 | Role admin | Chưa có cột `role`; `GET /users` đang lộ email/address của mọi người | Tạm để đó, làm sau |
