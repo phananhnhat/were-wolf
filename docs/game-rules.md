@@ -100,14 +100,14 @@ Ván chơi dừng ngay khi một điều kiện thắng được thoả mãn ở
 
 `rooms.maxPlayers` chỉ nhận 1 trong 4 giá trị cố định (xem [room.md §1.1](./room.md)). Vai trò tương ứng mỗi mốc được định nghĩa tĩnh trong code ở `ROLE_CONFIG_BY_MAX_PLAYERS` (`src/rooms/constants/room-configs.ts`), không lưu DB.
 
-**Đang chạy thật** — mới chỉ có 2 vai, các vai đặc biệt chưa được cài:
+**Đang chạy thật** — đã có Tiên tri và Bảo vệ; Phù thuỷ, Thợ săn, Người điên chưa cài:
 
 | Số người | Vai trò |
 |---|---|
-| 6 | 1 Sói, 5 Dân thường |
-| 8 | 2 Sói, 6 Dân thường |
-| 10 | 2 Sói, 8 Dân thường |
-| 15 | 3 Sói, 12 Dân thường |
+| 6 | 1 Sói, 4 Dân thường, 1 Bảo vệ |
+| 8 | 2 Sói, 4 Dân thường, 1 Bảo vệ, 1 Tiên tri |
+| 10 | 2 Sói, 6 Dân thường, 1 Bảo vệ, 1 Tiên tri |
+| 15 | 3 Sói, 10 Dân thường, 1 Bảo vệ, 1 Tiên tri |
 
 **Dự kiến khi đã có đủ vai đặc biệt** (chưa cài — xem [luat-choi.md §7](./luat-choi.md) về các điều kiện tiên quyết):
 
