@@ -538,8 +538,9 @@ export class GameService {
 
   /**
    * Bỏ/đổi phiếu của người gọi request cho lượt hiện tại. Cả 2 pha đều mở cổng bỏ phiếu:
-   * NIGHT chỉ Sói còn sống được vote (chọn nạn nhân), DAY mọi người còn sống được vote
-   * (đề nghị treo cổ). Gọi lại nhiều lần trong cùng pha = đổi phiếu, không cộng dồn
+   * NIGHT chỉ Sói còn sống được vote (chọn nạn nhân, và KHÔNG được chọn Sói khác),
+   * DAY mọi người còn sống được vote (đề nghị treo cổ, chọn được bất kỳ ai).
+   * Gọi lại nhiều lần trong cùng pha = đổi phiếu, không cộng dồn
    * (UNIQUE theo gameId+phase+dayNumber+voterId).
    */
   async castVote(gameId: number, voterId: number, targetUserId: number) {
@@ -567,6 +568,15 @@ export class GameService {
     if (!target) throw new NotFoundException('Người chơi không thuộc ván này');
     if (!target.isAlive) {
       throw new ConflictException('Không thể bỏ phiếu cho người đã chết');
+    }
+    // Sói không cắn đồng đội (tự cắn mình cũng nằm trong luật này). Ban ngày thì ngược lại —
+    // cả làng treo cổ được bất kỳ ai, kể cả Sói.
+    // Không rò rỉ gì: chỉ Sói mới bỏ phiếu được ban đêm, mà Sói vốn đã biết hết đồng đội.
+    if (
+      game.phase === GamePhase.NIGHT &&
+      WEREWOLF_ROLES.includes(target.role)
+    ) {
+      throw new BadRequestException('Ma Sói không thể cắn đồng đội');
     }
 
     const existingVote = await this.votesRepo.findOneBy({
