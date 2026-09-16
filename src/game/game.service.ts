@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import {
@@ -42,11 +42,18 @@ interface RoomDeletedPayload {
   roomId: number;
 }
 
+// Kết quả của 1 lần advanceGame(): hoặc ván vừa kết thúc (cần phát sự kiện game.finished
+// SAU KHI transaction đã commit), hoặc ván tiếp tục sang 1 pha mới (cần hẹn giờ cho pha đó).
+type AdvanceOutcome =
+  | { type: 'finished'; roomId: number }
+  | { type: 'continued'; phase: GamePhase };
+
 @Injectable()
 export class GameService {
   private readonly logger = new Logger(GameService.name);
 
   constructor(
+    private readonly dataSource: DataSource,
     @InjectRepository(Game)
     private readonly gamesRepo: Repository<Game>,
     @InjectRepository(GamePlayer)
@@ -73,30 +80,42 @@ export class GameService {
     }
 
     try {
-      // Tạo record game chơi
-      const game = await this.gamesRepo.save(
-        this.gamesRepo.create({
-          roomId: payload.roomId,
-          status: GameStatus.IN_PROGRESS,
-          phase: GamePhase.NIGHT,
-          dayNumber: 0,
-          phaseEndsAt: new Date(
-            Date.now() + PHASE_DURATION_MS[GamePhase.NIGHT],
-          ),
-        }),
-      );
+      // Tạo ván + chia vai trong CÙNG 1 transaction: nếu ghi game_players lỗi giữa chừng
+      // thì dòng games vừa tạo cũng rollback theo, không để sót một ván "ma" — status
+      // IN_PROGRESS nhưng 0 người chơi, khiến mọi người trong phòng bị 403 khi xem trạng
+      // thái ván (players.some(...) luôn false trên mảng rỗng).
+      const game = await this.dataSource.transaction(async (manager) => {
+        const gamesRepo = manager.getRepository(Game);
+        const playersRepo = manager.getRepository(GamePlayer);
 
-      const roles = this.buildShuffledRoles(payload.maxPlayers);
-      const players = payload.memberIds.map((userId, i) =>
-        this.playersRepo.create({
-          gameId: game.id,
-          userId,
-          role: roles[i],
-          isAlive: true,
-        }),
-      );
-      await this.playersRepo.save(players);
+        const newGame = await gamesRepo.save(
+          gamesRepo.create({
+            roomId: payload.roomId,
+            status: GameStatus.IN_PROGRESS,
+            phase: GamePhase.NIGHT,
+            dayNumber: 0,
+            phaseEndsAt: new Date(
+              Date.now() + PHASE_DURATION_MS[GamePhase.NIGHT],
+            ),
+          }),
+        );
 
+        const roles = this.buildShuffledRoles(payload.maxPlayers);
+        const players = payload.memberIds.map((userId, i) =>
+          playersRepo.create({
+            gameId: newGame.id,
+            userId,
+            role: roles[i],
+            isAlive: true,
+          }),
+        );
+        await playersRepo.save(players);
+
+        return newGame;
+      });
+
+      // Hẹn giờ SAU KHI transaction đã commit — đây là side effect trong RAM, không phải
+      // ghi DB, nên chỉ nên làm khi chắc chắn ván đã lưu thành công.
       this.schedulePhase(game.id, PHASE_DURATION_MS[GamePhase.NIGHT]);
     } catch (err) {
       this.logger.error(
@@ -663,8 +682,12 @@ export class GameService {
   }
 
   /** Đêm nay có Bảo vệ nào che người này không (tra theo mục tiêu, không theo người che). */
-  private async isProtected(game: Game, targetId: number): Promise<boolean> {
-    const row = await this.actionsRepo.findOneBy({
+  private async isProtected(
+    actionsRepo: Repository<GameAction>,
+    game: Game,
+    targetId: number,
+  ): Promise<boolean> {
+    const row = await actionsRepo.findOneBy({
       gameId: game.id,
       dayNumber: game.dayNumber,
       actionType: GameActionType.GUARDIAN_PROTECT,
@@ -738,14 +761,15 @@ export class GameService {
   /**
    * Bản ghi kỹ năng của MỘT LƯỢT, không quan tâm ai thực hiện — dùng khi áp dụng cái chết
    * (resolveNightDeaths), lúc đó chỉ cần biết "có ai cứu/độc đêm nay không", không cần biết
-   * là ai.
+   * là ai. Nhận `actionsRepo` của transaction vì luôn được gọi bên trong advanceGame().
    */
   private findActionOfType(
+    actionsRepo: Repository<GameAction>,
     gameId: number,
     dayNumber: number,
     actionType: GameActionType,
   ): Promise<GameAction | null> {
-    return this.actionsRepo.findOneBy({ gameId, dayNumber, actionType });
+    return actionsRepo.findOneBy({ gameId, dayNumber, actionType });
   }
 
   private findGuardianProtect(
@@ -950,50 +974,104 @@ export class GameService {
   /**
    * Hết giờ một pha: NIGHT → SKILL (nếu còn Phù thuỷ sống, ngược lại xử lý cái chết và mở
    * luôn DAY) → SKILL đóng thì xử lý cái chết rồi mở DAY → DAY đóng thì treo cổ rồi mở NIGHT
-   * (lượt +1). Xem docs/impl-phu-thuy.md §3.1.
+   * (lượt +1). Toàn bộ việc ĐỌC + GHI diễn ra trong CÙNG 1 transaction — "đánh dấu người
+   * chết" và "chuyển pha/kết thúc ván" phải cùng thành công hoặc cùng rollback, nếu không
+   * có thể xảy ra cảnh người đã chết thật trong DB nhưng ván vẫn đứng ở pha cũ vì chưa kịp
+   * ghi pha mới. Xem docs/impl-phu-thuy.md §3.1, §3.2.
+   *
+   * Side effect NGOÀI DB (hẹn giờ trong RAM, phát sự kiện cho RoomsModule) cố ý để SAU KHI
+   * transaction đã commit — không thực hiện những việc không thể rollback trong lúc giao
+   * dịch còn có thể thất bại.
    */
   private async advanceGame(gameId: number): Promise<void> {
-    const game = await this.gamesRepo.findOneBy({ id: gameId });
-    if (!game || game.status !== GameStatus.IN_PROGRESS) return;
+    const outcome = await this.dataSource.transaction(async (manager) => {
+      const gamesRepo = manager.getRepository(Game);
+      const playersRepo = manager.getRepository(GamePlayer);
+      const votesRepo = manager.getRepository(GameVote);
+      const actionsRepo = manager.getRepository(GameAction);
 
-    // Chốt chặn hẹn giờ bắn trùng: nếu phaseEndsAt còn ở tương lai nghĩa là một tick khác
-    // đã xử lý xong pha này rồi (đã đẩy phaseEndsAt sang pha kế). Không làm gì để tránh
-    // ván nhảy vọt một pha — xem docs/impl-phu-thuy.md §5.
-    if (game.phaseEndsAt && game.phaseEndsAt.getTime() > Date.now()) return;
+      const game = await gamesRepo.findOneBy({ id: gameId });
+      if (!game || game.status !== GameStatus.IN_PROGRESS) return null;
 
-    if (game.phase === GamePhase.NIGHT) {
-      // Xét "còn Phù thuỷ sống" TRƯỚC khi áp dụng cái chết của đêm nay — nên nếu chính
-      // Phù thuỷ là nạn nhân, pha SKILL vẫn mở và cô ấy vẫn kịp tự cứu.
-      if (await this.hasAliveWitch(gameId)) {
-        await this.openPhase(game, GamePhase.SKILL);
-        return;
+      // Chốt chặn hẹn giờ bắn trùng: nếu phaseEndsAt còn ở tương lai nghĩa là một tick khác
+      // đã xử lý xong pha này rồi (đã đẩy phaseEndsAt sang pha kế). Không làm gì để tránh
+      // ván nhảy vọt một pha — xem docs/impl-phu-thuy.md §5.
+      if (game.phaseEndsAt && game.phaseEndsAt.getTime() > Date.now()) {
+        return null;
       }
-      await this.resolveNightDeaths(game);
-      if (await this.checkWinCondition(game)) return;
-      await this.openPhase(game, GamePhase.DAY);
-      return;
-    }
 
-    if (game.phase === GamePhase.SKILL) {
-      await this.resolveNightDeaths(game);
-      if (await this.checkWinCondition(game)) return;
-      await this.openPhase(game, GamePhase.DAY);
-      return;
-    }
+      if (game.phase === GamePhase.NIGHT) {
+        // Xét "còn Phù thuỷ sống" TRƯỚC khi áp dụng cái chết của đêm nay — nên nếu chính
+        // Phù thuỷ là nạn nhân, pha SKILL vẫn mở và cô ấy vẫn kịp tự cứu.
+        if (await this.hasAliveWitch(playersRepo, gameId)) {
+          return this.advanceToPhase(gamesRepo, game, GamePhase.SKILL);
+        }
+        await this.resolveNightDeaths(
+          votesRepo,
+          playersRepo,
+          actionsRepo,
+          game,
+        );
+        const winner = await this.decideWinner(playersRepo, game);
+        if (winner) return this.settleGame(gamesRepo, game, winner);
+        return this.advanceToPhase(gamesRepo, game, GamePhase.DAY);
+      }
 
-    // DAY
-    await this.resolveDayLynch(game);
-    if (await this.checkWinCondition(game)) return;
-    game.dayNumber += 1;
-    await this.openPhase(game, GamePhase.NIGHT);
+      if (game.phase === GamePhase.SKILL) {
+        await this.resolveNightDeaths(
+          votesRepo,
+          playersRepo,
+          actionsRepo,
+          game,
+        );
+        const winner = await this.decideWinner(playersRepo, game);
+        if (winner) return this.settleGame(gamesRepo, game, winner);
+        return this.advanceToPhase(gamesRepo, game, GamePhase.DAY);
+      }
+
+      // DAY
+      await this.resolveDayLynch(votesRepo, playersRepo, game);
+      const winner = await this.decideWinner(playersRepo, game);
+      if (winner) return this.settleGame(gamesRepo, game, winner);
+      game.dayNumber += 1;
+      return this.advanceToPhase(gamesRepo, game, GamePhase.NIGHT);
+    });
+
+    if (!outcome) return; // ván không còn chạy, hoặc bị chặn bởi chốt bắn trùng
+
+    if (outcome.type === 'finished') {
+      this.cancelPhase(gameId);
+      this.eventEmitter.emit('game.finished', { roomId: outcome.roomId });
+    } else {
+      this.schedulePhase(gameId, PHASE_DURATION_MS[outcome.phase]);
+    }
   }
 
-  /** Mở một pha mới: đổi phase, đặt lại phaseEndsAt theo đúng thời lượng của pha đó, hẹn giờ. */
-  private async openPhase(game: Game, phase: GamePhase): Promise<void> {
+  /** Đổi phase, đặt lại phaseEndsAt theo đúng thời lượng của pha đó, rồi ghi trong transaction. */
+  private async advanceToPhase(
+    gamesRepo: Repository<Game>,
+    game: Game,
+    phase: GamePhase,
+  ): Promise<AdvanceOutcome> {
     game.phase = phase;
     game.phaseEndsAt = new Date(Date.now() + PHASE_DURATION_MS[phase]);
-    await this.gamesRepo.save(game);
-    this.schedulePhase(game.id, PHASE_DURATION_MS[phase]);
+    await gamesRepo.save(game);
+    return { type: 'continued', phase };
+  }
+
+  /** Ghi ván đã kết thúc trong transaction. Sự kiện game.finished phát ở advanceGame(), SAU commit. */
+  private async settleGame(
+    gamesRepo: Repository<Game>,
+    game: Game,
+    winner: GameWinner,
+  ): Promise<AdvanceOutcome> {
+    await gamesRepo.update(game.id, {
+      status: GameStatus.FINISHED,
+      winner,
+      finishedAt: new Date(),
+      phaseEndsAt: null,
+    });
+    return { type: 'finished', roomId: game.roomId };
   }
 
   /**
@@ -1001,8 +1079,11 @@ export class GameService {
    * "còn thuốc hay không": bỏ pha vì hết thuốc là rò rỉ (lộ Phù thuỷ đã cạn cả 2 bình).
    * Xem docs/impl-phu-thuy.md §3.1.
    */
-  private async hasAliveWitch(gameId: number): Promise<boolean> {
-    const witch = await this.playersRepo.findOneBy({
+  private async hasAliveWitch(
+    playersRepo: Repository<GamePlayer>,
+    gameId: number,
+  ): Promise<boolean> {
+    const witch = await playersRepo.findOneBy({
       gameId,
       role: WITCH_ROLE,
       isAlive: true,
@@ -1015,11 +1096,16 @@ export class GameService {
    * độc (không ai chặn được), gộp vào MỘT TẬP rồi đánh dấu chết cùng lúc. Trả về danh sách
    * người vừa chết để nơi gọi xét thắng thua. Xem docs/impl-phu-thuy.md §3.2.
    */
-  private async resolveNightDeaths(game: Game): Promise<GamePlayer[]> {
+  private async resolveNightDeaths(
+    votesRepo: Repository<GameVote>,
+    playersRepo: Repository<GamePlayer>,
+    actionsRepo: Repository<GameAction>,
+    game: Game,
+  ): Promise<GamePlayer[]> {
     const deadByUserId = new Map<number, GamePlayer>();
 
     // Nguồn 1: Sói cắn — trừ Bảo vệ che và trừ thuốc cứu.
-    const wolfVotes = await this.votesRepo.find({
+    const wolfVotes = await votesRepo.find({
       where: {
         gameId: game.id,
         phase: GamePhase.NIGHT,
@@ -1028,16 +1114,21 @@ export class GameService {
     });
     const victimId = this.pickUniqueMaxTarget(this.tallyByTarget(wolfVotes));
     if (victimId !== null) {
-      const protectedByGuardian = await this.isProtected(game, victimId);
+      const protectedByGuardian = await this.isProtected(
+        actionsRepo,
+        game,
+        victimId,
+      );
       // Chỉ cần hỏi "có bản ghi cứu đêm nay không" — phiếu Sói đã đóng băng nên mục tiêu
       // của bản ghi cứu (nếu có) luôn khớp với victimId, không cần so lại.
       const savedByWitch = await this.findActionOfType(
+        actionsRepo,
         game.id,
         game.dayNumber,
         GameActionType.WITCH_HEAL,
       );
       if (!protectedByGuardian && !savedByWitch) {
-        const victim = await this.playersRepo.findOneBy({
+        const victim = await playersRepo.findOneBy({
           gameId: game.id,
           userId: victimId,
         });
@@ -1047,12 +1138,13 @@ export class GameService {
 
     // Nguồn 2: thuốc độc — Bảo vệ KHÔNG chặn được, thuốc cứu KHÔNG cứu được.
     const poison = await this.findActionOfType(
+      actionsRepo,
       game.id,
       game.dayNumber,
       GameActionType.WITCH_POISON,
     );
     if (poison) {
-      const poisoned = await this.playersRepo.findOneBy({
+      const poisoned = await playersRepo.findOneBy({
         gameId: game.id,
         userId: poison.targetId,
       });
@@ -1061,7 +1153,7 @@ export class GameService {
 
     const deaths = [...deadByUserId.values()];
     if (deaths.length > 0) {
-      await this.playersRepo.update(
+      await playersRepo.update(
         { gameId: game.id, userId: In(deaths.map((d) => d.userId)) },
         { isAlive: false },
       );
@@ -1073,8 +1165,12 @@ export class GameService {
    * Treo cổ người bị vote nhiều nhất ở pha DAY. Không áp dụng che của Bảo vệ hay thuốc men
    * gì — cả hai chỉ có tác dụng ban đêm.
    */
-  private async resolveDayLynch(game: Game): Promise<GamePlayer | null> {
-    const votes = await this.votesRepo.find({
+  private async resolveDayLynch(
+    votesRepo: Repository<GameVote>,
+    playersRepo: Repository<GamePlayer>,
+    game: Game,
+  ): Promise<GamePlayer | null> {
+    const votes = await votesRepo.find({
       where: {
         gameId: game.id,
         phase: GamePhase.DAY,
@@ -1084,23 +1180,27 @@ export class GameService {
     const targetId = this.pickUniqueMaxTarget(this.tallyByTarget(votes));
     if (targetId === null) return null;
 
-    const target = await this.playersRepo.findOneBy({
+    const target = await playersRepo.findOneBy({
       gameId: game.id,
       userId: targetId,
     });
     if (!target) return null;
 
     target.isAlive = false;
-    await this.playersRepo.save(target);
+    await playersRepo.save(target);
     return target;
   }
 
   /**
-   * Điều kiện thắng theo docs/game-rules.md §5, dựa trên số người còn sống. Giai đoạn này
-   * chỉ có 2 phe nên không xét THIRD_PARTY.
+   * Xác định phe thắng theo docs/game-rules.md §5, dựa trên số người còn sống — KHÔNG có
+   * side effect gì (không tự ghi DB), chỉ trả về quyết định để advanceGame() gọi
+   * settleGame() nếu cần. Giai đoạn này chỉ có 2 phe nên không xét THIRD_PARTY.
    */
-  private async checkWinCondition(game: Game): Promise<boolean> {
-    const players = await this.playersRepo.find({
+  private async decideWinner(
+    playersRepo: Repository<GamePlayer>,
+    game: Game,
+  ): Promise<GameWinner | null> {
+    const players = await playersRepo.find({
       where: { gameId: game.id },
     });
     const aliveWerewolves = players.filter(
@@ -1110,31 +1210,9 @@ export class GameService {
       (p) => p.isAlive && !WEREWOLF_ROLES.includes(p.role),
     ).length;
 
-    let winner: GameWinner | null = null;
-    if (aliveWerewolves === 0) {
-      winner = GameWinner.VILLAGER;
-    } else if (aliveWerewolves >= aliveVillagerSide) {
-      winner = GameWinner.WEREWOLF;
-    }
-
-    if (winner) {
-      await this.finishGame(game.id, winner);
-      return true;
-    }
-    return false;
-  }
-
-  private async finishGame(gameId: number, winner: GameWinner): Promise<void> {
-    this.cancelPhase(gameId);
-    await this.gamesRepo.update(gameId, {
-      status: GameStatus.FINISHED,
-      winner,
-      finishedAt: new Date(),
-      phaseEndsAt: null,
-    });
-    const game = await this.gamesRepo.findOneBy({ id: gameId });
-    if (!game) return;
-    this.eventEmitter.emit('game.finished', { roomId: game.roomId });
+    if (aliveWerewolves === 0) return GameWinner.VILLAGER;
+    if (aliveWerewolves >= aliveVillagerSide) return GameWinner.WEREWOLF;
+    return null;
   }
 
   private buildShuffledRoles(maxPlayers: number): string[] {
