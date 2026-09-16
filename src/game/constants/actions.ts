@@ -4,7 +4,9 @@
 export enum GameActionType {
   SEER_CHECK = 'SEER_CHECK',
   GUARDIAN_PROTECT = 'GUARDIAN_PROTECT',
-  // Sau này: WITCH_HEAL, WITCH_POISON, HUNTER_SHOOT
+  WITCH_HEAL = 'WITCH_HEAL', // dùng ở pha SKILL — mục tiêu luôn là nạn nhân đêm nay
+  WITCH_POISON = 'WITCH_POISON', // dùng ở pha NIGHT — mục tiêu do Phù thuỷ chọn
+  // Sau này: HUNTER_SHOOT
 }
 
 // Kết quả soi của Tiên tri — cố ý chỉ nhị phân, KHÔNG trả tên vai cụ thể. Trả tên vai sẽ

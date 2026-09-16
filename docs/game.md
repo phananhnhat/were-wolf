@@ -26,7 +26,7 @@ Tài liệu này chỉ thiết kế phần **khởi tạo và kết thúc một 
 | `id` | serial PK | |
 | `gameId` | FK → `games.id`, `ON DELETE CASCADE` | |
 | `userId` | FK → `users.id` | |
-| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Hiện có `werewolf`, `villager`, `seer`, `guardian` |
+| `role` | varchar | Khớp key trong `ROLE_CONFIG_BY_MAX_PLAYERS`. Hiện có `werewolf`, `villager`, `seer`, `guardian`, `witch` |
 | `isAlive` | boolean, default true | |
 
 Ràng buộc: `UNIQUE(gameId, userId)`.
@@ -129,18 +129,21 @@ Vai trò là bí mật. Thông tin được tách làm 2 endpoint theo nguyên t
 
 `POST /games/:gameId/kill/:userId` (placeholder) đã được thay bằng rule engine thật. Lịch chuyển pha do `SchedulerRegistry` của `@nestjs/schedule` giữ — **mỗi ván một timer riêng** tên `game-phase-{id}`, không quét DB định kỳ. Chưa có WebSocket nên client tự poll `GET /games/room/:roomId` để lấy `phase`/`phaseEndsAt`/kết quả mới nhất.
 
-Thiết kế đầy đủ của vòng lượt: [game-rounds.md](./game-rounds.md).
+Thiết kế đầy đủ của vòng lượt 2 pha ban đầu: [game-rounds.md](./game-rounds.md) (lịch sử). Thiết kế pha `SKILL` và vai Phù thuỷ: [PLAN-PHU-THUY.md](../PLAN-PHU-THUY.md) và [impl-phu-thuy.md](./impl-phu-thuy.md).
 
 ### 9.1. Pha và thời lượng
 
-`Game.phase` có 2 giá trị và **cả hai đều mở cổng bỏ phiếu**: `NIGHT` → `DAY` → quay lại `NIGHT` (tăng `dayNumber`). Một lượt = 2 pha = 120 giây.
+`Game.phase` có 3 giá trị: `NIGHT` → `SKILL` (chỉ mở khi còn Phù thuỷ sống) → `DAY` → quay lại `NIGHT` (tăng `dayNumber`). Chỉ `NIGHT` và `DAY` mở cổng bỏ phiếu.
 
-| Pha | Thời lượng | Ai được vote | Kết thúc pha |
+| Pha | Thời lượng | Ai được vote / dùng kỹ năng | Kết thúc pha |
 |---|---|---|---|
-| `NIGHT` | 60 giây | Sói còn sống, chọn nạn nhân | Kiểm phiếu Sói → cắn chết người nhiều phiếu nhất (không công khai) → xét thắng thua → chuyển `DAY` |
+| `NIGHT` | 60 giây | Sói bỏ phiếu chọn nạn nhân; Bảo vệ che; Tiên tri soi; Phù thuỷ đầu độc | Đóng cổng bỏ phiếu. **Chưa giết ai.** Còn Phù thuỷ sống → mở `SKILL`; không còn → xử lý cái chết ngay rồi mở `DAY` |
+| `SKILL` | 15 giây | Chỉ Phù thuỷ: xem nạn nhân đêm nay rồi quyết định cứu hay không | Áp dụng toàn bộ cái chết của đêm (Sói cắn + thuốc độc, trừ Bảo vệ che và thuốc cứu) → xét thắng thua → chuyển `DAY` |
 | `DAY` | 60 giây | Toàn bộ người còn sống, chọn người treo cổ | Kiểm phiếu cả làng → treo cổ người nhiều phiếu nhất → xét thắng thua (mục 5) → `dayNumber += 1` và quay lại `NIGHT` |
 
-**Hòa phiếu (không có ai có số phiếu cao nhất duy nhất) → không giết/không treo cổ ai** — áp dụng như nhau cho cả 2 pha.
+**Hòa phiếu (không có ai có số phiếu cao nhất duy nhất) → không giết/không treo cổ ai.**
+
+Pha `SKILL` chỉ tồn tại để phục vụ đúng một quyết định của Phù thuỷ — mọi kỹ năng khác nằm trọn trong `NIGHT`. Pha này **luôn mở nếu ván có cấu hình Phù thuỷ và cô ấy còn sống**, kể cả khi đã dùng hết cả 2 bình thuốc — ẩn pha đi khi hết thuốc sẽ lộ luôn việc Phù thuỷ đã cạn thuốc. Ván không có Phù thuỷ (mốc 6, 8 người) không bao giờ có pha này.
 
 Không còn pha thảo luận riêng: cả làng bàn bạc ngay trong 60 giây của `DAY`.
 
@@ -150,12 +153,19 @@ Không còn pha thảo luận riêng: cả làng bàn bạc ngay trong 60 giây 
 |---|---|---|
 | `GET` | `/games/room/:roomId` | Trạng thái ván — **giống hệt nhau với mọi người trong ván** |
 | `GET` | `/games/:gameId/me` | Mọi thứ riêng tư của người gọi (vai, đồng đội, kỹ năng) |
-| `POST` | `/games/:gameId/vote` | Body `{ targetUserId }`. `NIGHT`: chỉ Sói còn sống gọi được. `DAY`: ai còn sống cũng gọi được. Gọi lại nhiều lần = đổi phiếu (không cộng dồn) |
-| `GET` | `/games/:gameId/votes` | Kiểm phiếu hiện tại của pha đang mở. `NIGHT` chỉ Sói xem được (bàn bạc kín, thấy phiếu đổi real-time qua polling); `DAY` ai cũng xem được (công khai) |
+| `POST` | `/games/:gameId/wolf/vote` | Body `{ targetUserId }`. Chỉ Sói còn sống, chỉ ở pha `NIGHT`. Không được chọn Sói khác. Gọi lại nhiều lần = đổi phiếu |
+| `GET` | `/games/:gameId/wolf/votes` | Kiểm phiếu cắn của lượt này — chỉ Sói xem được |
+| `POST` | `/games/:gameId/lynch/vote` | Body `{ targetUserId }`. Ai còn sống cũng gọi được, chỉ ở pha `DAY`. Chọn được bất kỳ ai, kể cả Sói |
+| `GET` | `/games/:gameId/lynch/votes` | Kiểm phiếu treo cổ của lượt này — ai trong ván cũng xem được |
 | `POST` | `/games/:gameId/seer/check` | Body `{ targetUserId }`. Tiên tri soi 1 người trong đêm hiện tại — mỗi đêm 1 lượt, ghi rồi không sửa được |
 | `GET` | `/games/:gameId/seer/checks` | Lịch sử soi của chính người gọi. Chỉ Tiên tri đọc được, lọc theo danh tính từ access token |
 | `POST` | `/games/:gameId/guardian/protect` | Body `{ targetUserId }`. Bảo vệ che 1 người khỏi bị Sói cắn đêm nay. Không tự che mình, không trùng 2 đêm liên tiếp |
 | `GET` | `/games/:gameId/guardian/protects` | Lịch sử che của chính người gọi. Chỉ Bảo vệ đọc được |
+| `POST` | `/games/:gameId/witch/poison` | Body `{ targetUserId }`. Phù thuỷ đầu độc 1 người — chỉ ở pha `NIGHT`, đúng 1 lần **cả ván** |
+| `POST` | `/games/:gameId/witch/heal` | **Không có body.** Phù thuỷ cứu nạn nhân bị Sói cắn đêm nay — chỉ ở pha `SKILL`, đúng 1 lần **cả ván**. Mục tiêu do server tự tính, không nhận từ client |
+| `GET` | `/games/:gameId/witch/actions` | Lịch sử dùng cả 2 loại thuốc của chính người gọi. Chỉ Phù thuỷ đọc được |
+
+> ⚠️ **Thay đổi phá vỡ tương thích**: `POST /games/:gameId/vote` và `GET /games/:gameId/votes` cũ đã **xoá**, tách thành 2 cặp `wolf/...` và `lynch/...` ở trên. Lý do: endpoint cũ dùng cách "mặc định cho phép" (chỉ chặn khi biết chắc sai pha), nên pha `SKILL` mới thêm vào sẽ tự động lọt lưới nếu không tách. Xem [impl-phu-thuy.md §3.3](./impl-phu-thuy.md).
 
 Bảng `game_votes` lưu 1 dòng/người/lượt (`UNIQUE(gameId, phase, dayNumber, voterId)`) — đổi phiếu là `UPDATE`, không tạo dòng mới, nên kiểm phiếu luôn tính đúng phiếu gần nhất.
 
@@ -239,7 +249,8 @@ Giai đoạn này chỉ có 2 phe nên `checkWinCondition()` chỉ xét theo s�
 ### 9.4. Giới hạn hiện tại
 
 - Timer chạy trong bộ nhớ process (`SchedulerRegistry` của `@nestjs/schedule`) — server restart giữa ván sẽ làm ván đó không tự chuyển pha nữa, **và người chơi bị nhốt trong phòng** vì `rooms.status` kẹt ở `PLAYING`. Đã ghi thành nợ kỹ thuật ở [PLAN.md §9](../PLAN.md).
-- Chỉ có 2 vai (`werewolf`, `villager`) — các vai đặc biệt ở [game-rules.md §2](./game-rules.md) chưa được chia và chưa có endpoint dùng kỹ năng.
+- Đã có 5 vai (`werewolf`, `villager`, `seer`, `guardian`, `witch`). Còn `hunter`, `fool` ở [game-rules.md §2](./game-rules.md) chưa được chia và chưa có endpoint dùng kỹ năng.
+- Chưa phân biệt nguyên nhân chết cho người chơi (chỉ có sống/chết) — cần cho nhật ký sự kiện và các vai sau này ([PLAN.md §8.2](../PLAN.md)), nhưng cố ý **không công khai** cho client vì sẽ lộ Phù thuỷ ([impl-phu-thuy.md §6](./impl-phu-thuy.md)).
 - Chưa có WebSocket broadcast — client phải tự poll để biết pha đổi/ai bị giết. Thiết kế gateway tương lai xem [room.md §6](./room.md).
 
 ---

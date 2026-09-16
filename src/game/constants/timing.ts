@@ -1,3 +1,9 @@
-// Cả 2 pha đều dài như nhau — NIGHT (Sói bỏ phiếu cắn) rồi DAY (cả làng bỏ phiếu treo cổ).
-// Xem docs/game-rounds.md §1.
-export const PHASE_DURATION_MS = 60 * 1000;
+import { GamePhase } from '../entities/game.entity';
+
+// Thời lượng theo pha. NIGHT/DAY giữ 60s. SKILL chỉ mở khi còn Phù thuỷ sống và chỉ phục vụ
+// đúng một quyết định (cứu hay không), nên ngắn hơn nhiều — xem docs/impl-phu-thuy.md §2.4.
+export const PHASE_DURATION_MS: Record<GamePhase, number> = {
+  [GamePhase.NIGHT]: 60 * 1000,
+  [GamePhase.SKILL]: 15 * 1000,
+  [GamePhase.DAY]: 60 * 1000,
+};

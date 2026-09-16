@@ -11,9 +11,10 @@ import {
 import { GameService } from './game.service';
 import { CastVoteDto } from './dto/cast-vote.dto';
 import { SeerCheckDto } from './dto/seer-check.dto';
+import { GuardianProtectDto } from './dto/guardian-protect.dto';
+import { WitchPoisonDto } from './dto/witch-poison.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
-import { GuardianProtectDto } from './dto/guardian-protect.dto';
 
 @Controller('games')
 export class GameController {
@@ -38,25 +39,44 @@ export class GameController {
     return this.gameService.getMyState(gameId, user.id);
   }
 
-  // NIGHT: chỉ Sói còn sống gọi được (chọn nạn nhân). DAY: ai còn sống cũng gọi được
-  // (đề nghị treo cổ). Gọi lại = đổi phiếu. Rule engine tự kiểm phiếu và chuyển pha khi hết giờ.
-  @Post(':gameId/vote')
+  // Sói bỏ phiếu chọn nạn nhân — chỉ dùng được ở pha NIGHT. Không được chọn Sói khác.
+  @Post(':gameId/wolf/vote')
   @HttpCode(HttpStatus.OK)
-  vote(
+  castWolfVote(
     @CurrentUser() user: User,
     @Param('gameId', ParseIntPipe) gameId: number,
     @Body() dto: CastVoteDto,
   ) {
-    return this.gameService.castVote(gameId, user.id, dto.targetUserId);
+    return this.gameService.castWolfVote(gameId, user.id, dto.targetUserId);
   }
 
-  // Kiểm phiếu hiện tại của pha đang mở — NIGHT chỉ Sói xem được, DAY ai cũng xem được.
-  @Get(':gameId/votes')
-  getVotes(
+  // Kiểm phiếu cắn của đêm nay — chỉ Sói xem được.
+  @Get(':gameId/wolf/votes')
+  getWolfVotes(
     @CurrentUser() user: User,
     @Param('gameId', ParseIntPipe) gameId: number,
   ) {
-    return this.gameService.getVoteTally(gameId, user.id);
+    return this.gameService.getWolfVoteTally(gameId, user.id);
+  }
+
+  // Cả làng bỏ phiếu treo cổ — chỉ dùng được ở pha DAY. Chọn được bất kỳ ai, kể cả Sói.
+  @Post(':gameId/lynch/vote')
+  @HttpCode(HttpStatus.OK)
+  castLynchVote(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+    @Body() dto: CastVoteDto,
+  ) {
+    return this.gameService.castLynchVote(gameId, user.id, dto.targetUserId);
+  }
+
+  // Kiểm phiếu treo cổ của lượt này — ai trong ván cũng xem được.
+  @Get(':gameId/lynch/votes')
+  getLynchVotes(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getLynchVoteTally(gameId, user.id);
   }
 
   // Tiên tri soi 1 người trong đêm hiện tại. Mỗi đêm đúng 1 lượt, gọi rồi thì không đổi
@@ -69,6 +89,15 @@ export class GameController {
     @Body() dto: SeerCheckDto,
   ) {
     return this.gameService.seerCheck(gameId, user.id, dto.targetUserId);
+  }
+
+  // Lịch sử soi của chính người gọi, từ đầu ván.
+  @Get(':gameId/seer/checks')
+  getMySeerChecks(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getMySeerChecks(gameId, user.id);
   }
 
   // Bảo vệ che 1 người trong đêm nay. Không được tự che mình, không được che trùng người
@@ -92,12 +121,34 @@ export class GameController {
     return this.gameService.getMyGuardianProtects(gameId, user.id);
   }
 
-  // Lịch sử soi của chính người gọi, từ đầu ván.
-  @Get(':gameId/seer/checks')
-  getMySeerChecks(
+  // Phù thuỷ đầu độc 1 người — chỉ dùng được ở pha NIGHT, đúng 1 lần CẢ VÁN.
+  @Post(':gameId/witch/poison')
+  @HttpCode(HttpStatus.OK)
+  witchPoison(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+    @Body() dto: WitchPoisonDto,
+  ) {
+    return this.gameService.witchPoison(gameId, user.id, dto.targetUserId);
+  }
+
+  // Phù thuỷ cứu nạn nhân bị Sói cắn đêm nay — chỉ dùng được ở pha SKILL, đúng 1 lần CẢ VÁN.
+  // KHÔNG có body: mục tiêu luôn là nạn nhân của lượt này, server tự tính.
+  @Post(':gameId/witch/heal')
+  @HttpCode(HttpStatus.OK)
+  witchHeal(
     @CurrentUser() user: User,
     @Param('gameId', ParseIntPipe) gameId: number,
   ) {
-    return this.gameService.getMySeerChecks(gameId, user.id);
+    return this.gameService.witchHeal(gameId, user.id);
+  }
+
+  // Lịch sử dùng cả 2 loại thuốc của chính người gọi, từ đầu ván.
+  @Get(':gameId/witch/actions')
+  getMyWitchActions(
+    @CurrentUser() user: User,
+    @Param('gameId', ParseIntPipe) gameId: number,
+  ) {
+    return this.gameService.getMyWitchActions(gameId, user.id);
   }
 }

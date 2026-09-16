@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { SchedulerRegistry } from '@nestjs/schedule';
 import {
@@ -20,7 +20,12 @@ import { GamePlayer } from './entities/game-player.entity';
 import { GameVote } from './entities/game-vote.entity';
 import { GameAction } from './entities/game-action.entity';
 import { GameActionType, SeerCheckResult } from './constants/actions';
-import { GUARDIAN_ROLE, SEER_ROLE, WEREWOLF_ROLES } from './constants/factions';
+import {
+  GUARDIAN_ROLE,
+  SEER_ROLE,
+  WEREWOLF_ROLES,
+  WITCH_ROLE,
+} from './constants/factions';
 import {
   ROLE_CONFIG_BY_MAX_PLAYERS,
   MaxPlayers,
@@ -75,7 +80,9 @@ export class GameService {
           status: GameStatus.IN_PROGRESS,
           phase: GamePhase.NIGHT,
           dayNumber: 0,
-          phaseEndsAt: new Date(Date.now() + PHASE_DURATION_MS),
+          phaseEndsAt: new Date(
+            Date.now() + PHASE_DURATION_MS[GamePhase.NIGHT],
+          ),
         }),
       );
 
@@ -90,7 +97,7 @@ export class GameService {
       );
       await this.playersRepo.save(players);
 
-      this.schedulePhase(game.id);
+      this.schedulePhase(game.id, PHASE_DURATION_MS[GamePhase.NIGHT]);
     } catch (err) {
       this.logger.error(
         `Tạo ván cho room #${payload.roomId} thất bại`,
@@ -206,11 +213,16 @@ export class GameService {
     // Tiên tri cần biết TRƯỚC khi bấm là đêm nay còn quyền soi không, và nếu soi rồi thì
     // kết quả là gì (để F5 hay đổi máy không mất thông tin). Xem docs/role-tien-tri.md §6.4.
     if (me.role === SEER_ROLE) {
-      const check = await this.findSeerCheck(gameId, game.dayNumber, userId);
+      const check = await this.findAction(
+        gameId,
+        game.dayNumber,
+        userId,
+        GameActionType.SEER_CHECK,
+      );
       return {
         ...base,
         seer: {
-          canCheckNow: this.canUseNightSkillNow(game, me) && !check,
+          canCheckNow: this.canUseSkillNow(game, me, GamePhase.NIGHT) && !check,
           checkedThisNight: check
             ? {
                 targetUserId: check.targetId,
@@ -232,7 +244,8 @@ export class GameService {
       return {
         ...base,
         guardian: {
-          canProtectNow: this.canUseNightSkillNow(game, me) && !tonight,
+          canProtectNow:
+            this.canUseSkillNow(game, me, GamePhase.NIGHT) && !tonight,
           protectedThisNight: tonight
             ? { targetUserId: tonight.targetId }
             : null,
@@ -242,19 +255,70 @@ export class GameService {
       };
     }
 
-    // Vai khác không có khoá `teammates`, `seer` lẫn `guardian` — kể cả rỗng, vì sự tồn tại
-    // của khoá cũng đã là một tín hiệu rò rỉ.
+    // Phù thuỷ cần biết: còn thuốc nào không (xét CẢ VÁN), lượt này đã dùng thuốc nào chưa,
+    // và nạn nhân của đêm nay — nhưng CHỈ khi đang ở pha kỹ năng (ngoài pha đó luôn rỗng,
+    // xem docs/impl-phu-thuy.md §3.6).
+    if (me.role === WITCH_ROLE) {
+      const [poisonUsed, healUsed, poisonTonight, healTonight] =
+        await Promise.all([
+          this.findActionThisGame(gameId, userId, GameActionType.WITCH_POISON),
+          this.findActionThisGame(gameId, userId, GameActionType.WITCH_HEAL),
+          this.findAction(
+            gameId,
+            game.dayNumber,
+            userId,
+            GameActionType.WITCH_POISON,
+          ),
+          this.findAction(
+            gameId,
+            game.dayNumber,
+            userId,
+            GameActionType.WITCH_HEAL,
+          ),
+        ]);
+
+      let victimTonight: number | null = null;
+      if (game.phase === GamePhase.SKILL) {
+        const wolfVotes = await this.votesRepo.find({
+          where: { gameId, phase: GamePhase.NIGHT, dayNumber: game.dayNumber },
+        });
+        victimTonight = this.pickUniqueMaxTarget(this.tallyByTarget(wolfVotes));
+      }
+
+      return {
+        ...base,
+        witch: {
+          canPoisonNow:
+            this.canUseSkillNow(game, me, GamePhase.NIGHT) && !poisonUsed,
+          canHealNow:
+            this.canUseSkillNow(game, me, GamePhase.SKILL) &&
+            !healUsed &&
+            victimTonight !== null,
+          poisonAvailable: !poisonUsed,
+          healAvailable: !healUsed,
+          victimTonight,
+          poisonedThisNight: poisonTonight
+            ? { targetUserId: poisonTonight.targetId }
+            : null,
+          healedThisNight: healTonight
+            ? { targetUserId: healTonight.targetId }
+            : null,
+        },
+      };
+    }
+
+    // Vai khác không có khoá `teammates`, `seer`, `guardian` lẫn `witch` — kể cả rỗng, vì
+    // sự tồn tại của khoá cũng đã là một tín hiệu rò rỉ.
     return base;
   }
 
-  /** Bây giờ bấm bỏ phiếu có được không — cùng bộ điều kiện castVote() kiểm tra. */
+  /** Bây giờ bấm bỏ phiếu có được không — cùng bộ điều kiện castWolfVote/castLynchVote kiểm tra. */
   private canVoteNow(game: Game, me: GamePlayer): boolean {
     if (game.status !== GameStatus.IN_PROGRESS) return false;
     if (!me.isAlive) return false;
-    if (game.phase === GamePhase.NIGHT && !WEREWOLF_ROLES.includes(me.role)) {
-      return false;
-    }
-    return true;
+    if (game.phase === GamePhase.NIGHT) return WEREWOLF_ROLES.includes(me.role);
+    if (game.phase === GamePhase.DAY) return true;
+    return false; // SKILL — không ai bỏ phiếu được ở pha này
   }
 
   /**
@@ -262,13 +326,26 @@ export class GameService {
    * Ghi một lần, KHÔNG sửa được — xem docs/role-tien-tri.md §2.
    */
   async seerCheck(gameId: number, actorId: number, targetUserId: number) {
-    const { game } = await this.assertCanUseNightSkill(
+    const { game } = await this.assertCanUseSkill(
       gameId,
       actorId,
       SEER_ROLE,
-      GameActionType.SEER_CHECK,
       'Tiên tri',
+      GamePhase.NIGHT,
     );
+
+    // Luật riêng của Tiên tri: mỗi ĐÊM đúng 1 lần. Tầng chặn 1 — tầng 2 là ràng buộc UNIQUE
+    // lúc ghi bên dưới, bịt khe hở giữa lúc kiểm tra và lúc ghi.
+    if (
+      await this.findAction(
+        gameId,
+        game.dayNumber,
+        actorId,
+        GameActionType.SEER_CHECK,
+      )
+    ) {
+      throw new ConflictException('Đêm nay bạn đã dùng lượt soi rồi');
+    }
 
     if (targetUserId === actorId) {
       throw new BadRequestException('Không thể tự soi chính mình');
@@ -307,13 +384,25 @@ export class GameService {
    * Xem docs/role-bao-ve.md.
    */
   async guardianProtect(gameId: number, actorId: number, targetUserId: number) {
-    const { game } = await this.assertCanUseNightSkill(
+    const { game } = await this.assertCanUseSkill(
       gameId,
       actorId,
       GUARDIAN_ROLE,
-      GameActionType.GUARDIAN_PROTECT,
       'Bảo vệ',
+      GamePhase.NIGHT,
     );
+
+    // Luật riêng của Bảo vệ: mỗi ĐÊM đúng 1 lần.
+    if (
+      await this.findAction(
+        gameId,
+        game.dayNumber,
+        actorId,
+        GameActionType.GUARDIAN_PROTECT,
+      )
+    ) {
+      throw new ConflictException('Đêm nay bạn đã dùng kỹ năng rồi');
+    }
 
     if (targetUserId === actorId) {
       throw new BadRequestException('Không thể tự bảo vệ chính mình');
@@ -381,24 +470,167 @@ export class GameService {
   }
 
   /**
-   * Các kiểm tra chung cho mọi kỹ năng dùng ban đêm. Tách ra dùng chung để mỗi vai mới
-   * không phải chép lại — chép rồi quên sửa chính là nguồn gốc của lỗi Bảo vệ trả về
-   * `isWerewolf` như Tiên tri.
+   * Phù thuỷ đầu độc 1 người bất kỳ đêm nay — dùng được ĐÚNG 1 LẦN CẢ VÁN. Bảo vệ không
+   * chặn được, thuốc cứu không cứu được. Xem docs/impl-phu-thuy.md §3.5.
    */
-  private async assertCanUseNightSkill(
+  async witchPoison(gameId: number, actorId: number, targetUserId: number) {
+    const { game } = await this.assertCanUseSkill(
+      gameId,
+      actorId,
+      WITCH_ROLE,
+      'Phù thuỷ',
+      GamePhase.NIGHT,
+    );
+
+    // Luật riêng của Phù thuỷ: mỗi bình chỉ dùng 1 lần CẢ VÁN, không phải mỗi đêm — khác
+    // Tiên tri/Bảo vệ nên không đưa vào assertCanUseSkill dùng chung.
+    if (
+      await this.findActionThisGame(
+        gameId,
+        actorId,
+        GameActionType.WITCH_POISON,
+      )
+    ) {
+      throw new ConflictException('Bạn đã dùng hết bình thuốc độc rồi');
+    }
+
+    if (targetUserId === actorId) {
+      throw new BadRequestException('Không thể tự đầu độc chính mình');
+    }
+
+    await this.assertLivingTarget(gameId, targetUserId);
+
+    try {
+      await this.actionsRepo.insert({
+        gameId,
+        dayNumber: game.dayNumber,
+        actionType: GameActionType.WITCH_POISON,
+        actorId,
+        targetId: targetUserId,
+        result: null,
+      });
+    } catch (err) {
+      if (this.isUniqueViolation(err)) {
+        throw new ConflictException('Bạn đã dùng hết bình thuốc độc rồi');
+      }
+      throw err;
+    }
+
+    return { dayNumber: game.dayNumber, targetUserId };
+  }
+
+  /**
+   * Phù thuỷ cứu nạn nhân bị Sói cắn đêm nay — dùng được ĐÚNG 1 LẦN CẢ VÁN, chỉ ở pha SKILL.
+   * KHÔNG nhận mục tiêu từ client: mục tiêu luôn là nạn nhân của lượt này, server tự tính rồi
+   * tự ghi — để client gửi lên sẽ mở đường dò nạn nhân bằng cách thử từng id.
+   * Xem docs/impl-phu-thuy.md §3.5.
+   */
+  async witchHeal(gameId: number, actorId: number) {
+    const { game } = await this.assertCanUseSkill(
+      gameId,
+      actorId,
+      WITCH_ROLE,
+      'Phù thuỷ',
+      GamePhase.SKILL,
+    );
+
+    // Luật riêng của Phù thuỷ: mỗi bình chỉ dùng 1 lần CẢ VÁN.
+    if (
+      await this.findActionThisGame(gameId, actorId, GameActionType.WITCH_HEAL)
+    ) {
+      throw new ConflictException('Bạn đã dùng hết bình thuốc cứu rồi');
+    }
+
+    const wolfVotes = await this.votesRepo.find({
+      where: { gameId, phase: GamePhase.NIGHT, dayNumber: game.dayNumber },
+    });
+    const victimId = this.pickUniqueMaxTarget(this.tallyByTarget(wolfVotes));
+    if (victimId === null) {
+      throw new ConflictException('Đêm nay không có ai bị Sói cắn để cứu');
+    }
+
+    // Chiều chặn "vừa cứu vừa độc cùng một người" nằm ở ĐÂY: độc dùng ở NIGHT nên luôn xảy
+    // ra trước cứu ở SKILL — xem docs/impl-phu-thuy.md §3.5.
+    const poison = await this.findAction(
+      gameId,
+      game.dayNumber,
+      actorId,
+      GameActionType.WITCH_POISON,
+    );
+    if (poison?.targetId === victimId) {
+      throw new BadRequestException(
+        'Bạn vừa đầu độc chính người này, không thể cứu',
+      );
+    }
+
+    try {
+      await this.actionsRepo.insert({
+        gameId,
+        dayNumber: game.dayNumber,
+        actionType: GameActionType.WITCH_HEAL,
+        actorId,
+        targetId: victimId,
+        result: null,
+      });
+    } catch (err) {
+      if (this.isUniqueViolation(err)) {
+        throw new ConflictException('Bạn đã dùng hết bình thuốc cứu rồi');
+      }
+      throw err;
+    }
+
+    return { dayNumber: game.dayNumber, targetUserId: victimId };
+  }
+
+  /** Lịch sử dùng cả 2 loại thuốc của chính người gọi, từ đầu ván. */
+  async getMyWitchActions(gameId: number, actorId: number) {
+    const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
+    if (!actor) throw new ForbiddenException('Bạn không thuộc ván chơi này');
+    if (actor.role !== WITCH_ROLE) {
+      throw new ForbiddenException('Chỉ Phù thuỷ mới xem được lịch sử này');
+    }
+
+    const rows = await this.actionsRepo.find({
+      where: {
+        gameId,
+        actorId,
+        actionType: In([
+          GameActionType.WITCH_HEAL,
+          GameActionType.WITCH_POISON,
+        ]),
+      },
+      order: { dayNumber: 'ASC' },
+    });
+
+    return {
+      actions: rows.map((r) => ({
+        dayNumber: r.dayNumber,
+        type: r.actionType,
+        targetUserId: r.targetId,
+      })),
+    };
+  }
+
+  /**
+   * Các kiểm tra CHUNG cho mọi kỹ năng — áp dụng như nhau bất kể vai gì: ván đang chạy,
+   * đúng pha, đúng vai, còn sống. KHÔNG kiểm tra "đã dùng chưa" — phạm vi đó (mỗi đêm với
+   * Tiên tri/Bảo vệ, cả ván với Phù thuỷ) là luật RIÊNG của từng vai, nên để đúng hàm xử lý
+   * vai đó tự kiểm tra ngay sau khi gọi hàm này. Xem docs/impl-phu-thuy.md §3.4.
+   */
+  private async assertCanUseSkill(
     gameId: number,
     actorId: number,
     requiredRole: string,
-    actionType: GameActionType,
     roleLabel: string,
+    requiredPhase: GamePhase,
   ): Promise<{ game: Game; actor: GamePlayer }> {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
     if (game.status !== GameStatus.IN_PROGRESS) {
       throw new ConflictException('Ván chơi đã kết thúc');
     }
-    if (game.phase !== GamePhase.NIGHT) {
-      throw new ConflictException('Kỹ năng này chỉ dùng được vào ban đêm');
+    if (game.phase !== requiredPhase) {
+      throw new ConflictException('Kỹ năng này chưa tới lượt dùng');
     }
 
     const actor = await this.playersRepo.findOneBy({ gameId, userId: actorId });
@@ -410,12 +642,6 @@ export class GameService {
     }
     if (!actor.isAlive) {
       throw new ForbiddenException('Bạn đã chết, không thể dùng kỹ năng');
-    }
-
-    // Tầng chặn 1: hỏi trước cho thông báo dễ hiểu. Tầng 2 là ràng buộc UNIQUE lúc ghi,
-    // bịt khe hở giữa lúc kiểm tra và lúc ghi — xem docs/role-tien-tri.md §4.5.
-    if (await this.findAction(gameId, game.dayNumber, actorId, actionType)) {
-      throw new ConflictException('Đêm nay bạn đã dùng kỹ năng rồi');
     }
 
     return { game, actor };
@@ -482,11 +708,12 @@ export class GameService {
     };
   }
 
+  /** Bản ghi kỹ năng của MỘT NGƯỜI cụ thể trong MỘT LƯỢT cụ thể (mọi vai dùng theo lượt). */
   private findAction(
     gameId: number,
     dayNumber: number,
     actorId: number,
-    actionType: (typeof GameActionType)[keyof typeof GameActionType],
+    actionType: GameActionType,
   ): Promise<GameAction | null> {
     return this.actionsRepo.findOneBy({
       gameId,
@@ -496,17 +723,29 @@ export class GameService {
     });
   }
 
-  private findSeerCheck(
+  /**
+   * Bản ghi kỹ năng của MỘT NGƯỜI cụ thể trong CẢ VÁN, không quan tâm lượt nào — dùng cho
+   * ràng buộc "1 lần cả ván" của 2 bình thuốc Phù thuỷ (xem docs/impl-phu-thuy.md §2.2).
+   */
+  private findActionThisGame(
+    gameId: number,
+    actorId: number,
+    actionType: GameActionType,
+  ): Promise<GameAction | null> {
+    return this.actionsRepo.findOneBy({ gameId, actorId, actionType });
+  }
+
+  /**
+   * Bản ghi kỹ năng của MỘT LƯỢT, không quan tâm ai thực hiện — dùng khi áp dụng cái chết
+   * (resolveNightDeaths), lúc đó chỉ cần biết "có ai cứu/độc đêm nay không", không cần biết
+   * là ai.
+   */
+  private findActionOfType(
     gameId: number,
     dayNumber: number,
-    actorId: number,
+    actionType: GameActionType,
   ): Promise<GameAction | null> {
-    return this.findAction(
-      gameId,
-      dayNumber,
-      actorId,
-      GameActionType.SEER_CHECK,
-    );
+    return this.actionsRepo.findOneBy({ gameId, dayNumber, actionType });
   }
 
   private findGuardianProtect(
@@ -522,12 +761,16 @@ export class GameService {
     );
   }
 
-  /** Điều kiện chung để dùng kỹ năng đêm. KHÔNG tính chuyện 'đêm nay đã dùng chưa' — phần
-   *  đó tra riêng vì mỗi vai có loại hành động khác nhau. */
-  private canUseNightSkillNow(game: Game, me: GamePlayer): boolean {
+  /** Điều kiện chung để dùng kỹ năng NGAY LÚC NÀY. KHÔNG tính chuyện "đã dùng chưa" — phần
+   *  đó tra riêng vì mỗi vai có loại hành động và phạm vi khác nhau. */
+  private canUseSkillNow(
+    game: Game,
+    me: GamePlayer,
+    requiredPhase: GamePhase,
+  ): boolean {
     return (
       game.status === GameStatus.IN_PROGRESS &&
-      game.phase === GamePhase.NIGHT &&
+      game.phase === requiredPhase &&
       me.isAlive
     );
   }
@@ -537,52 +780,51 @@ export class GameService {
   }
 
   /**
-   * Bỏ/đổi phiếu của người gọi request cho lượt hiện tại. Cả 2 pha đều mở cổng bỏ phiếu:
-   * NIGHT chỉ Sói còn sống được vote (chọn nạn nhân, và KHÔNG được chọn Sói khác),
-   * DAY mọi người còn sống được vote (đề nghị treo cổ, chọn được bất kỳ ai).
-   * Gọi lại nhiều lần trong cùng pha = đổi phiếu, không cộng dồn
-   * (UNIQUE theo gameId+phase+dayNumber+voterId).
+   * Các kiểm tra CHUNG cho mọi kiểu bỏ phiếu — áp dụng như nhau cho cắn lẫn treo cổ: ván
+   * đang chạy, đúng pha, người bỏ phiếu thuộc ván và còn sống, mục tiêu thuộc ván và còn
+   * sống. KHÔNG kiểm tra ai được vote hay vote được ai — luật "chỉ Sói mới vote, không được
+   * chọn Sói khác" là luật RIÊNG của bỏ phiếu cắn, để castWolfVote() tự kiểm ngay sau khi
+   * gọi hàm này (bỏ phiếu treo cổ không có luật nào thêm). Mỗi đường gọi tự khai báo đúng
+   * pha của mình — KHÔNG có nhánh "mặc định cho phép" như hàm castVote() cũ, nên pha mới
+   * thêm vào sau này tự động bị chặn. Xem docs/impl-phu-thuy.md §3.3, §3.4.
    */
-  async castVote(gameId: number, voterId: number, targetUserId: number) {
+  private async assertCanVote(
+    gameId: number,
+    voterId: number,
+    targetUserId: number,
+    requiredPhase: GamePhase,
+  ): Promise<{ game: Game; voter: GamePlayer; target: GamePlayer }> {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
     if (game.status !== GameStatus.IN_PROGRESS) {
       throw new ConflictException('Ván chơi đã kết thúc');
     }
+    if (game.phase !== requiredPhase) {
+      throw new ConflictException('Chưa tới lượt bỏ phiếu này');
+    }
 
     const voter = await this.playersRepo.findOneBy({ gameId, userId: voterId });
     if (!voter) throw new ForbiddenException('Bạn không thuộc ván chơi này');
-    if (!voter.isAlive)
+    if (!voter.isAlive) {
       throw new ForbiddenException('Bạn đã chết, không thể bỏ phiếu');
-    if (
-      game.phase === GamePhase.NIGHT &&
-      !WEREWOLF_ROLES.includes(voter.role)
-    ) {
-      throw new ForbiddenException('Chỉ Sói được chọn nạn nhân ban đêm');
     }
 
-    const target = await this.playersRepo.findOneBy({
-      gameId,
-      userId: targetUserId,
-    });
-    if (!target) throw new NotFoundException('Người chơi không thuộc ván này');
-    if (!target.isAlive) {
-      throw new ConflictException('Không thể bỏ phiếu cho người đã chết');
-    }
-    // Sói không cắn đồng đội (tự cắn mình cũng nằm trong luật này). Ban ngày thì ngược lại —
-    // cả làng treo cổ được bất kỳ ai, kể cả Sói.
-    // Không rò rỉ gì: chỉ Sói mới bỏ phiếu được ban đêm, mà Sói vốn đã biết hết đồng đội.
-    if (
-      game.phase === GamePhase.NIGHT &&
-      WEREWOLF_ROLES.includes(target.role)
-    ) {
-      throw new BadRequestException('Ma Sói không thể cắn đồng đội');
-    }
+    const target = await this.assertLivingTarget(gameId, targetUserId);
 
+    return { game, voter, target };
+  }
+
+  private async upsertVote(
+    gameId: number,
+    phase: GamePhase,
+    dayNumber: number,
+    voterId: number,
+    targetUserId: number,
+  ): Promise<void> {
     const existingVote = await this.votesRepo.findOneBy({
       gameId,
-      phase: game.phase,
-      dayNumber: game.dayNumber,
+      phase,
+      dayNumber,
       voterId,
     });
     if (existingVote) {
@@ -592,22 +834,79 @@ export class GameService {
       await this.votesRepo.save(
         this.votesRepo.create({
           gameId,
-          phase: game.phase,
-          dayNumber: game.dayNumber,
+          phase,
+          dayNumber,
           voterId,
           targetId: targetUserId,
         }),
       );
     }
-
-    return this.getVoteTally(gameId, voterId);
   }
 
   /**
-   * Kiểm phiếu hiện tại của pha đang mở. NIGHT chỉ Sói xem được (bàn bạc kín), DAY ai còn
-   * trong ván cũng xem được (bỏ phiếu công khai) — xem docs/game-rules.md.
+   * Sói bỏ/đổi phiếu chọn nạn nhân — chỉ dùng được ở pha NIGHT. Gọi lại nhiều lần trong
+   * cùng lượt = đổi phiếu, không cộng dồn (UNIQUE theo gameId+phase+dayNumber+voterId).
    */
-  async getVoteTally(gameId: number, requesterId: number) {
+  async castWolfVote(gameId: number, voterId: number, targetUserId: number) {
+    const { game, voter, target } = await this.assertCanVote(
+      gameId,
+      voterId,
+      targetUserId,
+      GamePhase.NIGHT,
+    );
+
+    // Luật riêng của bỏ phiếu cắn: chỉ Sói được vote, và không được chọn Sói khác (tự cắn
+    // mình cũng nằm trong luật này). Không rò rỉ gì: chỉ Sói mới bỏ phiếu được ban đêm, mà
+    // Sói vốn đã biết hết đồng đội.
+    if (!WEREWOLF_ROLES.includes(voter.role)) {
+      throw new ForbiddenException('Chỉ Sói được chọn nạn nhân ban đêm');
+    }
+    if (WEREWOLF_ROLES.includes(target.role)) {
+      throw new BadRequestException('Ma Sói không thể cắn đồng đội');
+    }
+
+    await this.upsertVote(
+      gameId,
+      GamePhase.NIGHT,
+      game.dayNumber,
+      voterId,
+      targetUserId,
+    );
+    return this.getWolfVoteTally(gameId, voterId);
+  }
+
+  /**
+   * Cả làng bỏ/đổi phiếu treo cổ — chỉ dùng được ở pha DAY. Gọi lại nhiều lần trong cùng
+   * lượt = đổi phiếu, không cộng dồn.
+   */
+  async castLynchVote(gameId: number, voterId: number, targetUserId: number) {
+    const { game } = await this.assertCanVote(
+      gameId,
+      voterId,
+      targetUserId,
+      GamePhase.DAY,
+    );
+    // Không có luật riêng nào thêm — ai còn sống cũng vote được, chọn được bất kỳ ai kể cả Sói.
+    await this.upsertVote(
+      gameId,
+      GamePhase.DAY,
+      game.dayNumber,
+      voterId,
+      targetUserId,
+    );
+    return this.getLynchVoteTally(gameId, voterId);
+  }
+
+  /**
+   * Kiểm phiếu của lượt hiện tại theo đúng 1 pha cố định. NIGHT chỉ Sói xem được (bàn bạc
+   * kín), DAY ai còn trong ván cũng xem được (bỏ phiếu công khai).
+   */
+  private async getVoteTally(
+    gameId: number,
+    requesterId: number,
+    phase: GamePhase,
+    wolfOnly: boolean,
+  ) {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game) throw new NotFoundException('Không tìm thấy ván chơi');
 
@@ -618,22 +917,19 @@ export class GameService {
     if (!requester)
       throw new ForbiddenException('Bạn không thuộc ván chơi này');
 
-    if (
-      game.phase === GamePhase.NIGHT &&
-      !WEREWOLF_ROLES.includes(requester.role)
-    ) {
+    if (wolfOnly && !WEREWOLF_ROLES.includes(requester.role)) {
       throw new ForbiddenException('Chỉ Ma Sói được xem phiếu ban đêm');
     }
 
     const votes = await this.votesRepo.find({
-      where: { gameId, phase: game.phase, dayNumber: game.dayNumber },
+      where: { gameId, phase, dayNumber: game.dayNumber },
     });
 
     const tally = this.tallyByTarget(votes);
     const myVote = votes.find((v) => v.voterId === requesterId);
 
     return {
-      phase: game.phase,
+      phase,
       dayNumber: game.dayNumber,
       phaseEndsAt: game.phaseEndsAt,
       myVoteTargetId: myVote?.targetId ?? null,
@@ -643,48 +939,150 @@ export class GameService {
     };
   }
 
+  async getWolfVoteTally(gameId: number, requesterId: number) {
+    return this.getVoteTally(gameId, requesterId, GamePhase.NIGHT, true);
+  }
+
+  async getLynchVoteTally(gameId: number, requesterId: number) {
+    return this.getVoteTally(gameId, requesterId, GamePhase.DAY, false);
+  }
+
   /**
-   * Hết giờ một pha: kiểm phiếu của pha vừa đóng, giết người bị vote nhiều nhất, xét điều
-   * kiện thắng rồi mở pha kế tiếp. NIGHT → DAY → NIGHT (lượt +1) → ...
-   * Xem docs/game-rounds.md §5.
+   * Hết giờ một pha: NIGHT → SKILL (nếu còn Phù thuỷ sống, ngược lại xử lý cái chết và mở
+   * luôn DAY) → SKILL đóng thì xử lý cái chết rồi mở DAY → DAY đóng thì treo cổ rồi mở NIGHT
+   * (lượt +1). Xem docs/impl-phu-thuy.md §3.1.
    */
   private async advanceGame(gameId: number): Promise<void> {
     const game = await this.gamesRepo.findOneBy({ id: gameId });
     if (!game || game.status !== GameStatus.IN_PROGRESS) return;
 
-    await this.resolveVoteKill(game);
-    if (await this.checkWinCondition(game)) return;
+    // Chốt chặn hẹn giờ bắn trùng: nếu phaseEndsAt còn ở tương lai nghĩa là một tick khác
+    // đã xử lý xong pha này rồi (đã đẩy phaseEndsAt sang pha kế). Không làm gì để tránh
+    // ván nhảy vọt một pha — xem docs/impl-phu-thuy.md §5.
+    if (game.phaseEndsAt && game.phaseEndsAt.getTime() > Date.now()) return;
 
     if (game.phase === GamePhase.NIGHT) {
-      game.phase = GamePhase.DAY;
-    } else {
-      game.phase = GamePhase.NIGHT;
-      game.dayNumber += 1;
+      // Xét "còn Phù thuỷ sống" TRƯỚC khi áp dụng cái chết của đêm nay — nên nếu chính
+      // Phù thuỷ là nạn nhân, pha SKILL vẫn mở và cô ấy vẫn kịp tự cứu.
+      if (await this.hasAliveWitch(gameId)) {
+        await this.openPhase(game, GamePhase.SKILL);
+        return;
+      }
+      await this.resolveNightDeaths(game);
+      if (await this.checkWinCondition(game)) return;
+      await this.openPhase(game, GamePhase.DAY);
+      return;
     }
-    game.phaseEndsAt = new Date(Date.now() + PHASE_DURATION_MS);
-    await this.gamesRepo.save(game);
 
-    this.schedulePhase(game.id);
+    if (game.phase === GamePhase.SKILL) {
+      await this.resolveNightDeaths(game);
+      if (await this.checkWinCondition(game)) return;
+      await this.openPhase(game, GamePhase.DAY);
+      return;
+    }
+
+    // DAY
+    await this.resolveDayLynch(game);
+    if (await this.checkWinCondition(game)) return;
+    game.dayNumber += 1;
+    await this.openPhase(game, GamePhase.NIGHT);
+  }
+
+  /** Mở một pha mới: đổi phase, đặt lại phaseEndsAt theo đúng thời lượng của pha đó, hẹn giờ. */
+  private async openPhase(game: Game, phase: GamePhase): Promise<void> {
+    game.phase = phase;
+    game.phaseEndsAt = new Date(Date.now() + PHASE_DURATION_MS[phase]);
+    await this.gamesRepo.save(game);
+    this.schedulePhase(game.id, PHASE_DURATION_MS[phase]);
   }
 
   /**
-   * Kiểm phiếu của pha đang mở và giết người bị vote nhiều nhất. Hòa phiếu hoặc không ai
-   * bỏ phiếu thì không ai chết.
+   * Ván này có cần mở pha SKILL không — chỉ khi còn Phù thuỷ sống. KHÔNG được xét thêm
+   * "còn thuốc hay không": bỏ pha vì hết thuốc là rò rỉ (lộ Phù thuỷ đã cạn cả 2 bình).
+   * Xem docs/impl-phu-thuy.md §3.1.
    */
-  private async resolveVoteKill(game: Game): Promise<GamePlayer | null> {
+  private async hasAliveWitch(gameId: number): Promise<boolean> {
+    const witch = await this.playersRepo.findOneBy({
+      gameId,
+      role: WITCH_ROLE,
+      isAlive: true,
+    });
+    return witch !== null;
+  }
+
+  /**
+   * Áp dụng toàn bộ cái chết của một đêm — Sói cắn (trừ Bảo vệ che, trừ thuốc cứu) và thuốc
+   * độc (không ai chặn được), gộp vào MỘT TẬP rồi đánh dấu chết cùng lúc. Trả về danh sách
+   * người vừa chết để nơi gọi xét thắng thua. Xem docs/impl-phu-thuy.md §3.2.
+   */
+  private async resolveNightDeaths(game: Game): Promise<GamePlayer[]> {
+    const deadByUserId = new Map<number, GamePlayer>();
+
+    // Nguồn 1: Sói cắn — trừ Bảo vệ che và trừ thuốc cứu.
+    const wolfVotes = await this.votesRepo.find({
+      where: {
+        gameId: game.id,
+        phase: GamePhase.NIGHT,
+        dayNumber: game.dayNumber,
+      },
+    });
+    const victimId = this.pickUniqueMaxTarget(this.tallyByTarget(wolfVotes));
+    if (victimId !== null) {
+      const protectedByGuardian = await this.isProtected(game, victimId);
+      // Chỉ cần hỏi "có bản ghi cứu đêm nay không" — phiếu Sói đã đóng băng nên mục tiêu
+      // của bản ghi cứu (nếu có) luôn khớp với victimId, không cần so lại.
+      const savedByWitch = await this.findActionOfType(
+        game.id,
+        game.dayNumber,
+        GameActionType.WITCH_HEAL,
+      );
+      if (!protectedByGuardian && !savedByWitch) {
+        const victim = await this.playersRepo.findOneBy({
+          gameId: game.id,
+          userId: victimId,
+        });
+        if (victim) deadByUserId.set(victim.userId, victim);
+      }
+    }
+
+    // Nguồn 2: thuốc độc — Bảo vệ KHÔNG chặn được, thuốc cứu KHÔNG cứu được.
+    const poison = await this.findActionOfType(
+      game.id,
+      game.dayNumber,
+      GameActionType.WITCH_POISON,
+    );
+    if (poison) {
+      const poisoned = await this.playersRepo.findOneBy({
+        gameId: game.id,
+        userId: poison.targetId,
+      });
+      if (poisoned) deadByUserId.set(poisoned.userId, poisoned);
+    }
+
+    const deaths = [...deadByUserId.values()];
+    if (deaths.length > 0) {
+      await this.playersRepo.update(
+        { gameId: game.id, userId: In(deaths.map((d) => d.userId)) },
+        { isAlive: false },
+      );
+    }
+    return deaths;
+  }
+
+  /**
+   * Treo cổ người bị vote nhiều nhất ở pha DAY. Không áp dụng che của Bảo vệ hay thuốc men
+   * gì — cả hai chỉ có tác dụng ban đêm.
+   */
+  private async resolveDayLynch(game: Game): Promise<GamePlayer | null> {
     const votes = await this.votesRepo.find({
-      where: { gameId: game.id, phase: game.phase, dayNumber: game.dayNumber },
+      where: {
+        gameId: game.id,
+        phase: GamePhase.DAY,
+        dayNumber: game.dayNumber,
+      },
     });
     const targetId = this.pickUniqueMaxTarget(this.tallyByTarget(votes));
     if (targetId === null) return null;
-
-    // Bảo vệ chỉ chặn được vết cắn ban đêm, KHÔNG chặn được việc cả làng treo cổ ban ngày.
-    if (
-      game.phase === GamePhase.NIGHT &&
-      (await this.isProtected(game, targetId))
-    ) {
-      return null; // Sói cắn trúng người được che → không ai chết đêm nay
-    }
 
     const target = await this.playersRepo.findOneBy({
       gameId: game.id,
@@ -788,7 +1186,7 @@ export class GameService {
    * Hẹn giờ đóng pha hiện tại của một ván. Timer nằm trong RAM (SchedulerRegistry) nên
    * restart server là ván đứng — nợ kỹ thuật đã ghi ở PLAN.md §7.
    */
-  private schedulePhase(gameId: number): void {
+  private schedulePhase(gameId: number, durationMs: number): void {
     this.cancelPhase(gameId); // mỗi ván chỉ giữ đúng 1 timer
     const timeout = setTimeout(() => {
       this.cancelPhase(gameId); // dọn khỏi registry trước khi chạy
@@ -798,7 +1196,7 @@ export class GameService {
           err instanceof Error ? err.stack : undefined,
         ),
       );
-    }, PHASE_DURATION_MS);
+    }, durationMs);
     this.schedulerRegistry.addTimeout(this.phaseTimerName(gameId), timeout);
   }
 

@@ -2,7 +2,9 @@
 
 Sau khi ván bắt đầu, hệ thống tự chạy các lượt chơi. Mỗi lượt gồm **2 pha, mỗi pha 60 giây**. Hết mỗi pha thì kiểm phiếu, người bị vote nhiều nhất bị đánh dấu đã chết.
 
-**Trạng thái: đã thực thi (2026-09-07).** Tham chiếu: [game.md](./game.md) (khởi tạo ván), [game-rules.md](./game-rules.md) (luật), [room.md](./room.md) (lobby).
+**Trạng thái: đã thực thi (2026-09-07), sau đó đã thêm pha `SKILL` cho vai Phù thuỷ.** Tài liệu này giữ nguyên làm hồ sơ lịch sử của giai đoạn 2 pha (`castVote`/`getVoteTally`, vai `werewolf`/`villager` mô tả bên dưới đã đổi khá nhiều). Trạng thái hiện tại xem [PLAN-PHU-THUY.md](../PLAN-PHU-THUY.md), [impl-phu-thuy.md](./impl-phu-thuy.md), và bảng endpoint mới nhất ở [game.md §9.2](./game.md).
+
+Tham chiếu: [game.md](./game.md) (khởi tạo ván), [game-rules.md](./game-rules.md) (luật), [room.md](./room.md) (lobby).
 
 Các quyết định đã chốt:
 
