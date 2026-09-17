@@ -7,6 +7,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  UseFilters,
 } from '@nestjs/common';
 import { GameService } from './game.service';
 import { CastVoteDto } from './dto/cast-vote.dto';
@@ -15,7 +16,12 @@ import { GuardianProtectDto } from './dto/guardian-protect.dto';
 import { WitchPoisonDto } from './dto/witch-poison.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
+import { GameDomainExceptionFilter } from './infrastructure/game-domain-exception.filter';
 
+// GameDomainExceptionFilter dịch GameDomainError (ném ra từ use case, qua GameService) sang
+// đúng HttpException — GameService không còn tự throw NotFoundException/... trực tiếp nữa, xem
+// CLEAN-ARCHITECTURE.md.
+@UseFilters(GameDomainExceptionFilter)
 @Controller('games')
 export class GameController {
   constructor(private readonly gameService: GameService) {}
