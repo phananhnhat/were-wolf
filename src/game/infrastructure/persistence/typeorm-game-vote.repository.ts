@@ -1,3 +1,5 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GameVote as GameVoteOrmEntity } from './game-vote.orm-entity';
 import { GameVote } from '../../domain/entities/game-vote.entity';
@@ -11,8 +13,12 @@ import { GameVoteRepository } from '../../domain/repositories/game-vote.reposito
 // GameVote domain không giữ id tự tăng — save() tự tra id hiện có theo khoá tự nhiên
 // (gameId, phase, dayNumber, voterId) trước khi ghi, để đổi phiếu ghi đè đúng dòng thay vì tạo
 // dòng mới (vi phạm UNIQUE). Cùng lý do/đánh đổi như TypeOrmGamePlayerRepository.
+@Injectable()
 export class TypeOrmGameVoteRepository implements GameVoteRepository {
-  constructor(private readonly repo: Repository<GameVoteOrmEntity>) {}
+  constructor(
+    @InjectRepository(GameVoteOrmEntity)
+    private readonly repo: Repository<GameVoteOrmEntity>,
+  ) {}
 
   async findByPhase(
     gameId: GameId,

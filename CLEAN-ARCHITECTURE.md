@@ -62,13 +62,13 @@ việc dữ liệu được lưu ở đâu.
 | `src/game/domain/repositories/*.repository.ts` — interface (port) + token `Symbol` cạnh mỗi interface, Domain định nghĩa "tôi cần gì" nhưng không tự làm | 1 — Domain (phần khai báo hợp đồng) | ✅ Đã tạo |
 | `src/game/application/ports/*.ts` (`GameUnitOfWork`, `GamePhaseScheduler`, `GameEventPublisher`, `Logger`) | 2 — Application (khai báo hợp đồng) | ✅ Đã tạo |
 | `src/game/application/use-cases/*.use-case.ts` (15 file, vd. `cast-wolf-vote.use-case.ts`) — thay hoàn toàn nội dung cũ của `GameService` | 2 — Application | ✅ Đã tạo và **đã nối dây thật**. Mỗi use case là **HÀM** (`export async function seerCheck(...)`), KHÔNG phải class — nhận repository/port cần dùng làm tham số đầu, gọi Domain layer để áp luật, không tự "biết" DI. `castWolfVote`/`castLynchVote` gọi thẳng `getVoteTally(...)` (import hàm, gọi bình thường) thay vì phải nhờ NestJS "tiêm" một use case khác vào. |
-| `src/game/infrastructure/persistence/typeorm-*.repository.ts` (4 file) — hiện thực hoá 4 repository interface ở `domain/repositories/` bằng `Repository<T>` của TypeORM, tự map domain ↔ ORM entity | 3 — Interface Adapters (Gateway) | ✅ Đã tạo |
+| `src/game/infrastructure/persistence/typeorm-*.repository.ts` (4 file) — hiện thực hoá 4 repository interface ở `domain/repositories/` bằng `Repository<T>` của TypeORM, tự map domain ↔ ORM entity | 3 — Interface Adapters (Gateway) | ✅ Đã tạo. Mỗi class là `@Injectable()` + `@InjectRepository(XxxOrmEntity)` trên tham số constructor — giống hệt cách 4 port Gateway bên dưới đã làm, nên `game.module.ts` chỉ cần `{ provide: TOKEN, useClass: ... }` cho cả 8, không cần `useFactory`/`getRepositoryToken()` thủ công nữa. |
 | `src/game/infrastructure/typeorm-game-unit-of-work.ts`, `game-phase-scheduler.adapter.ts`, `game-event-publisher.adapter.ts`, `logger.adapter.ts` — hiện thực hoá 4 port ở `application/ports/` | 3 — Interface Adapters (Gateway) | ✅ Đã tạo |
 | `src/game/infrastructure/game-domain-exception.filter.ts` — dịch `GameDomainError.code` → đúng `HttpException` | 3 — Interface Adapters | ✅ Đã tạo, gắn vào `GameController` qua `@UseFilters(...)` |
 | `src/game/game.controller.ts` + `src/game/dto/*.dto.ts` | 3 — Interface Adapters | ✅ Không đổi cách gọi `GameService`, chỉ thêm `@UseFilters(GameDomainExceptionFilter)` |
 | `src/game/infrastructure/persistence/*.orm-entity.ts` (4 file) — các class có decorator `@Entity()`, đổi tên + dọn từ `src/game/entities/` sang đây | 4 — Frameworks & Drivers | ✅ Đã đổi tên + di chuyển — xem lưu ý bên dưới |
 | `src/game/game.service.ts` | **3 — Interface Adapters (Facade, cố ý giữ lại)** | ✅ Viết lại — chỉ `@Inject` **8 adapter thô** (4 repository + 4 port) qua token, mỗi method gọi thẳng hàm use case tương ứng, tự truyền các adapter đó làm tham số. Không còn tự chứa luật/DB/transaction/hẹn giờ/sự kiện. Controller vẫn gọi vào đây, KHÔNG gọi thẳng use case — lựa chọn có chủ đích của dự án, không phải sai sót. |
-| `src/game/game.module.ts` | 4 — Frameworks & Drivers (composition root) | ✅ Viết lại — chỉ còn **8 provider** (4 repository Gateway + 4 port Gateway, bind interface Domain/Application → implementation Infrastructure qua token). Use case KHÔNG cần đăng ký provider riêng nữa vì là hàm thuần, không phải class NestJS phải khởi tạo. |
+| `src/game/game.module.ts` | 4 — Frameworks & Drivers (composition root) | ✅ Viết lại — chỉ còn **8 provider**, mỗi dòng `{ provide: TOKEN, useClass: XxxAdapter }` (bind interface Domain/Application → implementation Infrastructure qua token). Use case KHÔNG cần đăng ký provider riêng nữa vì là hàm thuần, không phải class NestJS phải khởi tạo. |
 | `src/app.module.ts`, `src/main.ts` | 4 — Frameworks & Drivers | Không đổi |
 
 ### Lưu ý: 2 khái niệm "entity" khác hẳn nhau, giờ đã tách tên rõ ràng
@@ -163,3 +163,11 @@ lặp" của domain layer (nay cũng đã xoá comment đó). Xác nhận bằng
 boot lại lần nữa qua Postgres và gọi cả 2 luồng (tạo phòng — qua `RoomsModule`'s `Game` repo, và
 endpoint ván chơi lỗi — qua `GameModule`) để chắc cả 2 module dùng entity đã di chuyển đều chạy
 đúng.
+
+Sau đó nữa, đổi 4 repository Gateway (`typeorm-*.repository.ts`) từ đăng ký qua `useFactory` +
+`getRepositoryToken()` thủ công sang `@Injectable()` + `@InjectRepository(...)` trên tham số
+constructor — cho đồng bộ với cách 4 port Gateway đã làm, và để `game.module.ts` chỉ còn toàn
+`useClass` một dòng cho cả 8 provider. `TypeOrmGameUnitOfWork.runInTransaction()` vẫn tự `new
+TypeOrmGameRepository(manager.getRepository(...))` bình thường bên trong transaction — decorator
+trên constructor chỉ ảnh hưởng lúc NestJS tự khởi tạo qua DI, không ảnh hưởng lúc gọi `new` tay.
+Xác nhận lại bằng build + boot + gọi API y hệt quy trình trên.

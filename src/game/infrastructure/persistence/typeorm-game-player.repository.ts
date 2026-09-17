@@ -1,3 +1,5 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GamePlayer as GamePlayerOrmEntity } from './game-player.orm-entity';
 import { GamePlayer } from '../../domain/entities/game-player.entity';
@@ -13,8 +15,12 @@ import { GamePlayerRepository } from '../../domain/repositories/game-player.repo
 // đánh dấu isAlive=false) thay vì lỡ insert trùng, vi phạm UNIQUE(gameId, userId) — nên tự tra
 // id hiện có theo khoá tự nhiên trước khi ghi. Thêm 1 SELECT/lần ghi, chấp nhận được vì tần
 // suất ghi bảng này thấp (vài người chơi mỗi lượt).
+@Injectable()
 export class TypeOrmGamePlayerRepository implements GamePlayerRepository {
-  constructor(private readonly repo: Repository<GamePlayerOrmEntity>) {}
+  constructor(
+    @InjectRepository(GamePlayerOrmEntity)
+    private readonly repo: Repository<GamePlayerOrmEntity>,
+  ) {}
 
   async findByGameId(gameId: GameId): Promise<GamePlayer[]> {
     const rows = await this.repo.find({

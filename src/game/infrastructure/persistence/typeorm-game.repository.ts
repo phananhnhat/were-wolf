@@ -1,3 +1,5 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Game as GameOrmEntity } from './game.orm-entity';
 import { Game } from '../../domain/entities/game.entity';
@@ -12,8 +14,12 @@ import { GameRepository } from '../../domain/repositories/game.repository';
 // Domain enum (GameStatus/GamePhase/GameWinner ở src/game/domain/enums/) và ORM enum (khai báo
 // trong chính file entity ORM) trùng giá trị chuỗi và tên thành viên — TypeScript coi 2 string
 // enum như vậy là gán được cho nhau thẳng, không cần cast.
+@Injectable()
 export class TypeOrmGameRepository implements GameRepository {
-  constructor(private readonly repo: Repository<GameOrmEntity>) {}
+  constructor(
+    @InjectRepository(GameOrmEntity)
+    private readonly repo: Repository<GameOrmEntity>,
+  ) {}
 
   async findById(id: GameId): Promise<Game | null> {
     const row = await this.repo.findOneBy({ id: id.toNumber() });

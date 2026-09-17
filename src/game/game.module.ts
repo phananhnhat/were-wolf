@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
-import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { GameController } from './game.controller';
 import { GameService } from './game.service';
 import { Game } from './infrastructure/persistence/game.orm-entity';
@@ -26,10 +25,10 @@ import { GamePhaseSchedulerAdapter } from './infrastructure/game-phase-scheduler
 import { GameEventPublisherAdapter } from './infrastructure/game-event-publisher.adapter';
 import { LoggerAdapter } from './infrastructure/logger.adapter';
 
-// Composition root của GameModule — nơi DUY NHẤT "biết" cả 4 layer cùng lúc. Chỉ còn 8 provider
-// (4 repository Gateway + 4 port Gateway) — Application layer giờ là HÀM thuần (xem
-// application/use-cases/), không còn là class cần đăng ký provider riêng, nên GameService chỉ
-// cần inject 8 adapter thô này rồi tự gọi hàm use case tương ứng.
+// Composition root của GameModule — nơi DUY NHẤT "biết" cả 4 layer cùng lúc. 8 provider (4
+// repository Gateway + 4 port Gateway), tất cả đều `@Injectable()` nên chỉ cần `useClass` — mỗi
+// adapter tự khai deps của nó qua constructor (`@InjectRepository(...)` cho 4 cái đầu, các
+// service NestJS chuẩn như DataSource/SchedulerRegistry/EventEmitter2 cho 4 cái sau).
 @Module({
   imports: [TypeOrmModule.forFeature([Game, GamePlayer, GameVote, GameAction])],
   controllers: [GameController],
@@ -37,29 +36,10 @@ import { LoggerAdapter } from './infrastructure/logger.adapter';
     GameService,
 
     // --- 4 repository Gateway (bind interface Domain → TypeORM) ---
-    {
-      provide: GAME_REPOSITORY,
-      useFactory: (repo: Repository<Game>) => new TypeOrmGameRepository(repo),
-      inject: [getRepositoryToken(Game)],
-    },
-    {
-      provide: GAME_PLAYER_REPOSITORY,
-      useFactory: (repo: Repository<GamePlayer>) =>
-        new TypeOrmGamePlayerRepository(repo),
-      inject: [getRepositoryToken(GamePlayer)],
-    },
-    {
-      provide: GAME_VOTE_REPOSITORY,
-      useFactory: (repo: Repository<GameVote>) =>
-        new TypeOrmGameVoteRepository(repo),
-      inject: [getRepositoryToken(GameVote)],
-    },
-    {
-      provide: GAME_ACTION_REPOSITORY,
-      useFactory: (repo: Repository<GameAction>) =>
-        new TypeOrmGameActionRepository(repo),
-      inject: [getRepositoryToken(GameAction)],
-    },
+    { provide: GAME_REPOSITORY, useClass: TypeOrmGameRepository },
+    { provide: GAME_PLAYER_REPOSITORY, useClass: TypeOrmGamePlayerRepository },
+    { provide: GAME_VOTE_REPOSITORY, useClass: TypeOrmGameVoteRepository },
+    { provide: GAME_ACTION_REPOSITORY, useClass: TypeOrmGameActionRepository },
 
     // --- 4 port Gateway (bind interface Application → NestJS thật) ---
     { provide: GAME_UNIT_OF_WORK, useClass: TypeOrmGameUnitOfWork },

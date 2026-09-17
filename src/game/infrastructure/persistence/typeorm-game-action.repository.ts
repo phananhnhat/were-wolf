@@ -1,3 +1,5 @@
+import { Injectable } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import { GameAction as GameActionOrmEntity } from './game-action.orm-entity';
 import { GameAction } from '../../domain/entities/game-action.entity';
@@ -13,8 +15,12 @@ import { SkillAlreadyUsedError } from '../../domain/errors/skill-already-used.er
 // ghi ở domain/repositories/game-action.repository.ts: vi phạm UNIQUE constraint (Postgres mã
 // 23505 — "đã dùng kỹ năng rồi") PHẢI dịch thành SkillAlreadyUsedError, không để lộ chi tiết
 // Postgres ra khỏi Infrastructure layer.
+@Injectable()
 export class TypeOrmGameActionRepository implements GameActionRepository {
-  constructor(private readonly repo: Repository<GameActionOrmEntity>) {}
+  constructor(
+    @InjectRepository(GameActionOrmEntity)
+    private readonly repo: Repository<GameActionOrmEntity>,
+  ) {}
 
   async findOneByActorAndDay(
     gameId: GameId,
