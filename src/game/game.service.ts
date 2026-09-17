@@ -1,174 +1,206 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { GamePhase } from './domain/enums/game-phase.enum';
-import {
-  GetGameStateUseCase,
-  GET_GAME_STATE_USE_CASE,
-} from './application/use-cases/get-game-state.use-case';
-import {
-  GetMyStateUseCase,
-  GET_MY_STATE_USE_CASE,
-} from './application/use-cases/get-my-state.use-case';
-import {
-  SeerCheckUseCase,
-  SEER_CHECK_USE_CASE,
-} from './application/use-cases/seer-check.use-case';
-import {
-  GetMySeerChecksUseCase,
-  GET_MY_SEER_CHECKS_USE_CASE,
-} from './application/use-cases/get-my-seer-checks.use-case';
-import {
-  GuardianProtectUseCase,
-  GUARDIAN_PROTECT_USE_CASE,
-} from './application/use-cases/guardian-protect.use-case';
-import {
-  GetMyGuardianProtectsUseCase,
-  GET_MY_GUARDIAN_PROTECTS_USE_CASE,
-} from './application/use-cases/get-my-guardian-protects.use-case';
-import {
-  WitchPoisonUseCase,
-  WITCH_POISON_USE_CASE,
-} from './application/use-cases/witch-poison.use-case';
-import {
-  WitchHealUseCase,
-  WITCH_HEAL_USE_CASE,
-} from './application/use-cases/witch-heal.use-case';
-import {
-  GetMyWitchActionsUseCase,
-  GET_MY_WITCH_ACTIONS_USE_CASE,
-} from './application/use-cases/get-my-witch-actions.use-case';
-import {
-  CastWolfVoteUseCase,
-  CAST_WOLF_VOTE_USE_CASE,
-} from './application/use-cases/cast-wolf-vote.use-case';
-import {
-  CastLynchVoteUseCase,
-  CAST_LYNCH_VOTE_USE_CASE,
-} from './application/use-cases/cast-lynch-vote.use-case';
-import {
-  GetVoteTallyUseCase,
-  GET_VOTE_TALLY_USE_CASE,
-} from './application/use-cases/get-vote-tally.use-case';
-import {
-  StartGameUseCase,
-  START_GAME_USE_CASE,
-} from './application/use-cases/start-game.use-case';
+import { GAME_REPOSITORY } from './domain/repositories/game.repository';
+import { GAME_PLAYER_REPOSITORY } from './domain/repositories/game-player.repository';
+import { GAME_VOTE_REPOSITORY } from './domain/repositories/game-vote.repository';
+import { GAME_ACTION_REPOSITORY } from './domain/repositories/game-action.repository';
+import { GAME_UNIT_OF_WORK } from './application/ports/game-unit-of-work';
+import { GAME_PHASE_SCHEDULER } from './application/ports/game-phase-scheduler';
+import { GAME_EVENT_PUBLISHER } from './application/ports/game-event-publisher';
+import { GAME_LOGGER } from './application/ports/logger';
+
+// `import type` — @Inject() bật emitDecoratorMetadata cho constructor, TS cần các type này
+// KHÔNG tồn tại lúc runtime (interface biến mất khi compile), nếu không sẽ báo lỗi TS1272.
+import type { GameRepository } from './domain/repositories/game.repository';
+import type { GamePlayerRepository } from './domain/repositories/game-player.repository';
+import type { GameVoteRepository } from './domain/repositories/game-vote.repository';
+import type { GameActionRepository } from './domain/repositories/game-action.repository';
+import type { GameUnitOfWork } from './application/ports/game-unit-of-work';
+import type { GamePhaseScheduler } from './application/ports/game-phase-scheduler';
+import type { GameEventPublisher } from './application/ports/game-event-publisher';
+import type { Logger } from './application/ports/logger';
+
+import { getGameState } from './application/use-cases/get-game-state.use-case';
+import { getMyState } from './application/use-cases/get-my-state.use-case';
+import { seerCheck } from './application/use-cases/seer-check.use-case';
+import { getMySeerChecks } from './application/use-cases/get-my-seer-checks.use-case';
+import { guardianProtect } from './application/use-cases/guardian-protect.use-case';
+import { getMyGuardianProtects } from './application/use-cases/get-my-guardian-protects.use-case';
+import { witchPoison } from './application/use-cases/witch-poison.use-case';
+import { witchHeal } from './application/use-cases/witch-heal.use-case';
+import { getMyWitchActions } from './application/use-cases/get-my-witch-actions.use-case';
+import { castWolfVote } from './application/use-cases/cast-wolf-vote.use-case';
+import { castLynchVote } from './application/use-cases/cast-lynch-vote.use-case';
+import { getVoteTally } from './application/use-cases/get-vote-tally.use-case';
+import { startGame } from './application/use-cases/start-game.use-case';
 import type { StartGameInput } from './application/use-cases/start-game.use-case';
-import {
-  CancelGamesForRoomUseCase,
-  CANCEL_GAMES_FOR_ROOM_USE_CASE,
-} from './application/use-cases/cancel-games-for-room.use-case';
+import { cancelGamesForRoom } from './application/use-cases/cancel-games-for-room.use-case';
 
 interface RoomDeletedPayload {
   roomId: number;
 }
 
-// Facade (Interface Adapter) — nơi GameController và RoomsModule (qua @OnEvent) gọi vào. Mỗi
-// method chỉ delegate xuống đúng 1 use case ở Application layer, không tự chứa luật nghiệp vụ
-// hay truy xuất DB nữa — những cái đó đã chuyển hết sang Domain/Application ở 2 bước trước.
-// Cố ý GIỮ LẠI lớp Facade này (thay vì để GameController gọi thẳng use case) theo lựa chọn của
-// dự án — xem CLEAN-ARCHITECTURE.md.
+// Facade (Interface Adapter) — nơi GameController và RoomsModule (qua @OnEvent) gọi vào. Chỉ
+// giữ 8 adapter thô (4 repository + 4 port) qua DI, rồi mỗi method gọi thẳng hàm use case
+// (Application layer, plain function — không còn là class cần DI riêng, xem
+// CLEAN-ARCHITECTURE.md). Cố ý GIỮ LẠI lớp Facade này (thay vì để GameController gọi thẳng use
+// case) theo lựa chọn của dự án.
 @Injectable()
 export class GameService {
   constructor(
-    @Inject(GET_GAME_STATE_USE_CASE)
-    private readonly getGameStateUseCase: GetGameStateUseCase,
-    @Inject(GET_MY_STATE_USE_CASE)
-    private readonly getMyStateUseCase: GetMyStateUseCase,
-    @Inject(SEER_CHECK_USE_CASE)
-    private readonly seerCheckUseCase: SeerCheckUseCase,
-    @Inject(GET_MY_SEER_CHECKS_USE_CASE)
-    private readonly getMySeerChecksUseCase: GetMySeerChecksUseCase,
-    @Inject(GUARDIAN_PROTECT_USE_CASE)
-    private readonly guardianProtectUseCase: GuardianProtectUseCase,
-    @Inject(GET_MY_GUARDIAN_PROTECTS_USE_CASE)
-    private readonly getMyGuardianProtectsUseCase: GetMyGuardianProtectsUseCase,
-    @Inject(WITCH_POISON_USE_CASE)
-    private readonly witchPoisonUseCase: WitchPoisonUseCase,
-    @Inject(WITCH_HEAL_USE_CASE)
-    private readonly witchHealUseCase: WitchHealUseCase,
-    @Inject(GET_MY_WITCH_ACTIONS_USE_CASE)
-    private readonly getMyWitchActionsUseCase: GetMyWitchActionsUseCase,
-    @Inject(CAST_WOLF_VOTE_USE_CASE)
-    private readonly castWolfVoteUseCase: CastWolfVoteUseCase,
-    @Inject(CAST_LYNCH_VOTE_USE_CASE)
-    private readonly castLynchVoteUseCase: CastLynchVoteUseCase,
-    @Inject(GET_VOTE_TALLY_USE_CASE)
-    private readonly getVoteTallyUseCase: GetVoteTallyUseCase,
-    @Inject(START_GAME_USE_CASE)
-    private readonly startGameUseCase: StartGameUseCase,
-    @Inject(CANCEL_GAMES_FOR_ROOM_USE_CASE)
-    private readonly cancelGamesForRoomUseCase: CancelGamesForRoomUseCase,
+    @Inject(GAME_REPOSITORY) private readonly games: GameRepository,
+    @Inject(GAME_PLAYER_REPOSITORY)
+    private readonly players: GamePlayerRepository,
+    @Inject(GAME_VOTE_REPOSITORY) private readonly votes: GameVoteRepository,
+    @Inject(GAME_ACTION_REPOSITORY)
+    private readonly actions: GameActionRepository,
+    @Inject(GAME_UNIT_OF_WORK) private readonly unitOfWork: GameUnitOfWork,
+    @Inject(GAME_PHASE_SCHEDULER)
+    private readonly scheduler: GamePhaseScheduler,
+    @Inject(GAME_EVENT_PUBLISHER)
+    private readonly eventPublisher: GameEventPublisher,
+    @Inject(GAME_LOGGER) private readonly logger: Logger,
   ) {}
 
   @OnEvent('room.started')
   handleRoomStarted(payload: StartGameInput): Promise<void> {
-    return this.startGameUseCase.execute(payload);
+    return startGame(
+      this.games,
+      this.unitOfWork,
+      this.scheduler,
+      this.eventPublisher,
+      this.logger,
+      payload,
+    );
   }
 
   @OnEvent('room.deleted')
   handleRoomDeleted(payload: RoomDeletedPayload): Promise<void> {
-    return this.cancelGamesForRoomUseCase.execute(payload.roomId);
+    return cancelGamesForRoom(this.games, this.scheduler, payload.roomId);
   }
 
   // Trạng thái ván — giống hệt nhau với mọi người trong ván, không chứa gì riêng tư. Xem
   // docs/game.md §9.2.
   getGameState(roomId: number, userId: number) {
-    return this.getGameStateUseCase.execute(roomId, userId);
+    return getGameState(this.games, this.players, roomId, userId);
   }
 
   // Thông tin riêng của người gọi (vai, đồng đội Sói, làm được gì lúc này).
   getMyState(gameId: number, userId: number) {
-    return this.getMyStateUseCase.execute(gameId, userId);
+    return getMyState(
+      this.games,
+      this.players,
+      this.votes,
+      this.actions,
+      gameId,
+      userId,
+    );
   }
 
   seerCheck(gameId: number, actorId: number, targetUserId: number) {
-    return this.seerCheckUseCase.execute(gameId, actorId, targetUserId);
+    return seerCheck(
+      this.games,
+      this.players,
+      this.actions,
+      gameId,
+      actorId,
+      targetUserId,
+    );
   }
 
   getMySeerChecks(gameId: number, actorId: number) {
-    return this.getMySeerChecksUseCase.execute(gameId, actorId);
+    return getMySeerChecks(this.players, this.actions, gameId, actorId);
   }
 
   guardianProtect(gameId: number, actorId: number, targetUserId: number) {
-    return this.guardianProtectUseCase.execute(gameId, actorId, targetUserId);
+    return guardianProtect(
+      this.games,
+      this.players,
+      this.actions,
+      gameId,
+      actorId,
+      targetUserId,
+    );
   }
 
   getMyGuardianProtects(gameId: number, actorId: number) {
-    return this.getMyGuardianProtectsUseCase.execute(gameId, actorId);
+    return getMyGuardianProtects(this.players, this.actions, gameId, actorId);
   }
 
   witchPoison(gameId: number, actorId: number, targetUserId: number) {
-    return this.witchPoisonUseCase.execute(gameId, actorId, targetUserId);
+    return witchPoison(
+      this.games,
+      this.players,
+      this.actions,
+      gameId,
+      actorId,
+      targetUserId,
+    );
   }
 
   witchHeal(gameId: number, actorId: number) {
-    return this.witchHealUseCase.execute(gameId, actorId);
+    return witchHeal(
+      this.games,
+      this.players,
+      this.votes,
+      this.actions,
+      gameId,
+      actorId,
+    );
   }
 
   getMyWitchActions(gameId: number, actorId: number) {
-    return this.getMyWitchActionsUseCase.execute(gameId, actorId);
+    return getMyWitchActions(this.players, this.actions, gameId, actorId);
   }
 
   castWolfVote(gameId: number, voterId: number, targetUserId: number) {
-    return this.castWolfVoteUseCase.execute(gameId, voterId, targetUserId);
+    return castWolfVote(
+      this.games,
+      this.players,
+      this.votes,
+      gameId,
+      voterId,
+      targetUserId,
+    );
   }
 
   castLynchVote(gameId: number, voterId: number, targetUserId: number) {
-    return this.castLynchVoteUseCase.execute(gameId, voterId, targetUserId);
+    return castLynchVote(
+      this.games,
+      this.players,
+      this.votes,
+      gameId,
+      voterId,
+      targetUserId,
+    );
   }
 
   getWolfVoteTally(gameId: number, requesterId: number) {
-    return this.getVoteTallyUseCase.execute(gameId, requesterId, {
-      phase: GamePhase.NIGHT,
-      wolfOnly: true,
-    });
+    return getVoteTally(
+      this.games,
+      this.players,
+      this.votes,
+      gameId,
+      requesterId,
+      {
+        phase: GamePhase.NIGHT,
+        wolfOnly: true,
+      },
+    );
   }
 
   getLynchVoteTally(gameId: number, requesterId: number) {
-    return this.getVoteTallyUseCase.execute(gameId, requesterId, {
-      phase: GamePhase.DAY,
-      wolfOnly: false,
-    });
+    return getVoteTally(
+      this.games,
+      this.players,
+      this.votes,
+      gameId,
+      requesterId,
+      {
+        phase: GamePhase.DAY,
+        wolfOnly: false,
+      },
+    );
   }
 }

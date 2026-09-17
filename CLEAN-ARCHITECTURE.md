@@ -61,14 +61,14 @@ việc dữ liệu được lưu ở đâu.
 | `src/game/domain/errors/*.error.ts` | 1 — Domain | ✅ Đã tạo |
 | `src/game/domain/repositories/*.repository.ts` — interface (port) + token `Symbol` cạnh mỗi interface, Domain định nghĩa "tôi cần gì" nhưng không tự làm | 1 — Domain (phần khai báo hợp đồng) | ✅ Đã tạo |
 | `src/game/application/ports/*.ts` (`GameUnitOfWork`, `GamePhaseScheduler`, `GameEventPublisher`, `Logger`) | 2 — Application (khai báo hợp đồng) | ✅ Đã tạo |
-| `src/game/application/use-cases/*.use-case.ts` (15 file, vd. `cast-wolf-vote.use-case.ts`) — thay hoàn toàn nội dung cũ của `GameService` | 2 — Application | ✅ Đã tạo và **đã nối dây thật** (không còn là code chết) |
+| `src/game/application/use-cases/*.use-case.ts` (15 file, vd. `cast-wolf-vote.use-case.ts`) — thay hoàn toàn nội dung cũ của `GameService` | 2 — Application | ✅ Đã tạo và **đã nối dây thật**. Mỗi use case là **HÀM** (`export async function seerCheck(...)`), KHÔNG phải class — nhận repository/port cần dùng làm tham số đầu, gọi Domain layer để áp luật, không tự "biết" DI. `castWolfVote`/`castLynchVote` gọi thẳng `getVoteTally(...)` (import hàm, gọi bình thường) thay vì phải nhờ NestJS "tiêm" một use case khác vào. |
 | `src/game/infrastructure/persistence/typeorm-*.repository.ts` (4 file) — hiện thực hoá 4 repository interface ở `domain/repositories/` bằng `Repository<T>` của TypeORM, tự map domain ↔ ORM entity | 3 — Interface Adapters (Gateway) | ✅ Đã tạo |
 | `src/game/infrastructure/typeorm-game-unit-of-work.ts`, `game-phase-scheduler.adapter.ts`, `game-event-publisher.adapter.ts`, `logger.adapter.ts` — hiện thực hoá 4 port ở `application/ports/` | 3 — Interface Adapters (Gateway) | ✅ Đã tạo |
 | `src/game/infrastructure/game-domain-exception.filter.ts` — dịch `GameDomainError.code` → đúng `HttpException` | 3 — Interface Adapters | ✅ Đã tạo, gắn vào `GameController` qua `@UseFilters(...)` |
 | `src/game/game.controller.ts` + `src/game/dto/*.dto.ts` | 3 — Interface Adapters | ✅ Không đổi cách gọi `GameService`, chỉ thêm `@UseFilters(GameDomainExceptionFilter)` |
 | `src/game/entities/*.entity.ts` — **các class có decorator `@Entity()` hiện tại** | 4 — Frameworks & Drivers | ⚠️ Vẫn ở vị trí cũ (nợ kỹ thuật — xem mục 5) — xem lưu ý bên dưới |
-| `src/game/game.service.ts` | **3 — Interface Adapters (Facade, cố ý giữ lại)** | ✅ Viết lại — mỗi method chỉ delegate 1 dòng xuống use case tương ứng qua token (`@Inject`), không còn tự chứa luật/DB/transaction/hẹn giờ/sự kiện. Controller vẫn gọi vào đây, KHÔNG gọi thẳng use case — lựa chọn có chủ đích của dự án, không phải sai sót. |
-| `src/game/game.module.ts` | 4 — Frameworks & Drivers (composition root) | ✅ Viết lại — nơi DUY NHẤT bind interface (Domain/Application) vào implementation (Infrastructure) qua token, "biết" cả 4 layer cùng lúc |
+| `src/game/game.service.ts` | **3 — Interface Adapters (Facade, cố ý giữ lại)** | ✅ Viết lại — chỉ `@Inject` **8 adapter thô** (4 repository + 4 port) qua token, mỗi method gọi thẳng hàm use case tương ứng, tự truyền các adapter đó làm tham số. Không còn tự chứa luật/DB/transaction/hẹn giờ/sự kiện. Controller vẫn gọi vào đây, KHÔNG gọi thẳng use case — lựa chọn có chủ đích của dự án, không phải sai sót. |
+| `src/game/game.module.ts` | 4 — Frameworks & Drivers (composition root) | ✅ Viết lại — chỉ còn **8 provider** (4 repository Gateway + 4 port Gateway, bind interface Domain/Application → implementation Infrastructure qua token). Use case KHÔNG cần đăng ký provider riêng nữa vì là hàm thuần, không phải class NestJS phải khởi tạo. |
 | `src/app.module.ts`, `src/main.ts` | 4 — Frameworks & Drivers | Không đổi |
 
 ### Lưu ý dễ nhầm: `src/game/entities/` KHÔNG phải Domain layer
@@ -92,15 +92,16 @@ Postgres — xem mục 6):
 ```
 [Layer 3] GameController.castWolfVote()
     → gọi [Layer 3] GameService.castWolfVote()   // Facade, giữ nguyên chữ ký cũ cho controller
-        → gọi [Layer 2] CastWolfVoteUseCase.execute(gameId, voterId, targetId)
+        → gọi [Layer 2] castWolfVote(this.games, this.players, this.votes, gameId, voterId, targetId)
+          // HÀM thuần, không phải use case instance — GameService tự truyền 3 adapter đã inject
 
-[Layer 2] CastWolfVoteUseCase.execute(...)
-    → gameRepo.findById(gameId)              // qua INTERFACE, không biết TypeORM
-    → playerRepo.findByGameAndUser(...)
+[Layer 2] castWolfVote(games, players, votes, ...)
+    → games.findById(gameId)                 // qua INTERFACE, không biết TypeORM
+    → players.findByGameAndUser(...)
     → [Layer 1] GameRulesService.assertCanVote(game, voter, target, NIGHT)   ← luật nằm ở đây
     → [Layer 1] GameRulesService.assertWolfVoteRules(voter, target)         ← luật nằm ở đây
-    → voteRepo.save(GameVote.cast(...))       // qua INTERFACE
-    → trả kết quả qua GetVoteTallyUseCase (một use case khác, dùng lại)
+    → votes.save(GameVote.cast(...))          // qua INTERFACE
+    → return getVoteTally(games, players, votes, ...)   // gọi thẳng 1 hàm khác, không qua DI
 
 [Layer 3] TypeOrmGameRepository / TypeOrmGameVoteRepository implements ...Repository
     → thật sự chạy this.repo.findOneBy(...)/this.repo.save(...) của TypeORM
@@ -112,6 +113,15 @@ Nếu có lỗi (vd. ván không tồn tại): [Layer 1] ném GameNotFoundError 
 HTTP) → [Layer 3] GameDomainExceptionFilter bắt được (@UseFilters trên GameController) → dịch
 thành NotFoundException → response HTTP 404 y hệt trước khi tách layer.
 ```
+
+**Vì sao `castWolfVote` gọi thẳng `getVoteTally` bằng lời gọi hàm bình thường, không qua DI**:
+use case không còn là class NestJS quản lý vòng đời, nên "dùng lại 1 use case khác" chỉ đơn
+giản là import hàm rồi gọi — không cần khai token, không cần đăng ký provider. Đây cũng là lý do
+`GamePhaseSchedulerAdapter` (Infrastructure) hết cần `ModuleRef`/`OnModuleInit`: nó tự gọi
+`advanceGame(this.unitOfWork, this, this.eventPublisher, gameId)` trực tiếp trong callback của
+`setTimeout` — vòng lặp phụ thuộc "scheduler cần use case, use case cần scheduler" từng phải xử
+lý bằng cách lấy lười qua `ModuleRef` không còn tồn tại nữa, vì `this` (adapter tự implement
+`GamePhaseScheduler`) dùng được ngay, không cần NestJS "tiêm" gì thêm.
 
 Khác biệt cốt lõi: **luật "chỉ Sói được vote, không cắn đồng đội" nằm đúng một chỗ**
 (`GameRulesService`, Layer 1), test được bằng cách gọi thẳng hàm đó với dữ liệu giả — không cần
@@ -138,3 +148,9 @@ sai hoặc vòng lặp phụ thuộc chưa xử lý đúng sẽ lộ ra ngay ở
 đăng ký, đăng nhập, tạo phòng, và gọi endpoint ván chơi với id không tồn tại để xác nhận
 `GameDomainExceptionFilter` trả đúng `404 { "message": "Không tìm thấy ván chơi" }` — y hệt
 hành vi cũ.
+
+Sau đó, khi chuyển 15 use case từ class sang hàm thuần (giảm `game.module.ts` từ 23 xuống còn
+8 provider) và bỏ `ModuleRef`/`OnModuleInit` ở `GamePhaseSchedulerAdapter`, đã boot lại + gọi
+API lại đúng quy trình trên để xác nhận không có gì hỏng theo — bao gồm cả đường gọi
+`castWolfVote → getVoteTally` (2 hàm gọi trực tiếp nhau, không qua DI) trả đúng 404 qua
+`GameDomainExceptionFilter` như trước khi đổi.

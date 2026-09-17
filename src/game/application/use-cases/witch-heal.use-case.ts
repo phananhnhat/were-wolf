@@ -14,8 +14,6 @@ import { GameNotFoundError } from '../../domain/errors/game-not-found.error';
 import { PlayerNotInGameError } from '../../domain/errors/player-not-in-game.error';
 import { SkillAlreadyUsedError } from '../../domain/errors/skill-already-used.error';
 
-export const WITCH_HEAL_USE_CASE = Symbol('WITCH_HEAL_USE_CASE');
-
 export interface WitchHealOutput {
   dayNumber: number;
   targetUserId: number;
@@ -25,83 +23,81 @@ export interface WitchHealOutput {
 // KHÔNG nhận mục tiêu từ client: mục tiêu luôn là nạn nhân của lượt này, tự tính từ phiếu Sói
 // rồi tự ghi — để client gửi lên sẽ mở đường dò nạn nhân bằng cách thử từng id. Xem
 // docs/impl-phu-thuy.md §3.5.
-export class WitchHealUseCase {
-  constructor(
-    private readonly games: GameRepository,
-    private readonly players: GamePlayerRepository,
-    private readonly votes: GameVoteRepository,
-    private readonly actions: GameActionRepository,
-  ) {}
+export async function witchHeal(
+  games: GameRepository,
+  players: GamePlayerRepository,
+  votes: GameVoteRepository,
+  actions: GameActionRepository,
+  gameId: number,
+  actorId: number,
+): Promise<WitchHealOutput> {
+  const gid = GameId.of(gameId);
+  const actorPid = PlayerId.of(actorId);
 
-  async execute(gameId: number, actorId: number): Promise<WitchHealOutput> {
-    const gid = GameId.of(gameId);
-    const actorPid = PlayerId.of(actorId);
+  const game = await games.findById(gid);
+  if (!game) throw new GameNotFoundError();
 
-    const game = await this.games.findById(gid);
-    if (!game) throw new GameNotFoundError();
+  const actor = await players.findByGameAndUser(gid, actorPid);
+  if (!actor) throw new PlayerNotInGameError();
 
-    const actor = await this.players.findByGameAndUser(gid, actorPid);
-    if (!actor) throw new PlayerNotInGameError();
+  GameRulesService.assertCanUseSkill(
+    game,
+    actor,
+    Role.WITCH,
+    'Phù thuỷ',
+    GamePhase.SKILL,
+  );
 
-    GameRulesService.assertCanUseSkill(
-      game,
-      actor,
-      Role.WITCH,
-      'Phù thuỷ',
-      GamePhase.SKILL,
-    );
+  // Luật riêng của Phù thuỷ: mỗi bình chỉ dùng 1 lần CẢ VÁN.
+  const already = await actions.findOneByActorThisGame(
+    gid,
+    actorPid,
+    GameActionType.WITCH_HEAL,
+  );
+  if (already) {
+    throw new SkillAlreadyUsedError('Bạn đã dùng hết bình thuốc cứu rồi');
+  }
 
-    // Luật riêng của Phù thuỷ: mỗi bình chỉ dùng 1 lần CẢ VÁN.
-    const already = await this.actions.findOneByActorThisGame(
-      gid,
-      actorPid,
-      GameActionType.WITCH_HEAL,
-    );
-    if (already) {
+  const wolfVotes = await votes.findByPhase(
+    gid,
+    GamePhase.NIGHT,
+    game.dayNumber,
+  );
+  const victimId = VoteTally.pickUniqueMaxTarget(
+    VoteTally.tallyByTarget(wolfVotes),
+  );
+  GameRulesService.assertVictimExistsToHeal(victimId);
+
+  // Chiều chặn "vừa cứu vừa độc cùng một người" — độc dùng ở NIGHT nên luôn xảy ra trước cứu ở
+  // SKILL. Xem docs/impl-phu-thuy.md §3.5.
+  const poison = await actions.findOneByActorAndDay(
+    gid,
+    game.dayNumber,
+    GameActionType.WITCH_POISON,
+    actorPid,
+  );
+  GameRulesService.assertWitchNotHealingPoisonedTarget(
+    victimId,
+    poison?.targetId ?? null,
+  );
+
+  const action = GameAction.record({
+    gameId: game.id.toNumber(),
+    dayNumber: game.dayNumber,
+    actionType: GameActionType.WITCH_HEAL,
+    actorId: actorPid,
+    targetId: victimId,
+    result: null,
+  });
+
+  try {
+    await actions.record(action);
+  } catch (err) {
+    if (err instanceof SkillAlreadyUsedError) {
       throw new SkillAlreadyUsedError('Bạn đã dùng hết bình thuốc cứu rồi');
     }
-
-    const wolfVotes = await this.votes.findByPhase(
-      gid,
-      GamePhase.NIGHT,
-      game.dayNumber,
-    );
-    const victimId = VoteTally.pickUniqueMaxTarget(
-      VoteTally.tallyByTarget(wolfVotes),
-    );
-    GameRulesService.assertVictimExistsToHeal(victimId);
-
-    // Chiều chặn "vừa cứu vừa độc cùng một người" — độc dùng ở NIGHT nên luôn xảy ra trước cứu
-    // ở SKILL. Xem docs/impl-phu-thuy.md §3.5.
-    const poison = await this.actions.findOneByActorAndDay(
-      gid,
-      game.dayNumber,
-      GameActionType.WITCH_POISON,
-      actorPid,
-    );
-    GameRulesService.assertWitchNotHealingPoisonedTarget(
-      victimId,
-      poison?.targetId ?? null,
-    );
-
-    const action = GameAction.record({
-      gameId: game.id.toNumber(),
-      dayNumber: game.dayNumber,
-      actionType: GameActionType.WITCH_HEAL,
-      actorId: actorPid,
-      targetId: victimId,
-      result: null,
-    });
-
-    try {
-      await this.actions.record(action);
-    } catch (err) {
-      if (err instanceof SkillAlreadyUsedError) {
-        throw new SkillAlreadyUsedError('Bạn đã dùng hết bình thuốc cứu rồi');
-      }
-      throw err;
-    }
-
-    return { dayNumber: game.dayNumber, targetUserId: victimId.toNumber() };
+    throw err;
   }
+
+  return { dayNumber: game.dayNumber, targetUserId: victimId.toNumber() };
 }
