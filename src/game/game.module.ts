@@ -3,10 +3,10 @@ import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { GameController } from './game.controller';
 import { GameService } from './game.service';
-import { Game } from './entities/game.entity';
-import { GamePlayer } from './entities/game-player.entity';
-import { GameVote } from './entities/game-vote.entity';
-import { GameAction } from './entities/game-action.entity';
+import { Game } from './infrastructure/persistence/game.orm-entity';
+import { GamePlayer } from './infrastructure/persistence/game-player.orm-entity';
+import { GameVote } from './infrastructure/persistence/game-vote.orm-entity';
+import { GameAction } from './infrastructure/persistence/game-action.orm-entity';
 
 import { GAME_REPOSITORY } from './domain/repositories/game.repository';
 import { GAME_PLAYER_REPOSITORY } from './domain/repositories/game-player.repository';

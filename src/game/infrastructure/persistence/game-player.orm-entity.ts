@@ -6,8 +6,8 @@ import {
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm';
-import { Game } from './game.entity';
-import { User } from '../../users/entities/user.entity';
+import { Game } from './game.orm-entity';
+import { User } from '../../../users/entities/user.entity';
 
 @Entity('game_players')
 @Unique(['gameId', 'userId'])

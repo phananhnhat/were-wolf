@@ -66,23 +66,22 @@ việc dữ liệu được lưu ở đâu.
 | `src/game/infrastructure/typeorm-game-unit-of-work.ts`, `game-phase-scheduler.adapter.ts`, `game-event-publisher.adapter.ts`, `logger.adapter.ts` — hiện thực hoá 4 port ở `application/ports/` | 3 — Interface Adapters (Gateway) | ✅ Đã tạo |
 | `src/game/infrastructure/game-domain-exception.filter.ts` — dịch `GameDomainError.code` → đúng `HttpException` | 3 — Interface Adapters | ✅ Đã tạo, gắn vào `GameController` qua `@UseFilters(...)` |
 | `src/game/game.controller.ts` + `src/game/dto/*.dto.ts` | 3 — Interface Adapters | ✅ Không đổi cách gọi `GameService`, chỉ thêm `@UseFilters(GameDomainExceptionFilter)` |
-| `src/game/entities/*.entity.ts` — **các class có decorator `@Entity()` hiện tại** | 4 — Frameworks & Drivers | ⚠️ Vẫn ở vị trí cũ (nợ kỹ thuật — xem mục 5) — xem lưu ý bên dưới |
+| `src/game/infrastructure/persistence/*.orm-entity.ts` (4 file) — các class có decorator `@Entity()`, đổi tên + dọn từ `src/game/entities/` sang đây | 4 — Frameworks & Drivers | ✅ Đã đổi tên + di chuyển — xem lưu ý bên dưới |
 | `src/game/game.service.ts` | **3 — Interface Adapters (Facade, cố ý giữ lại)** | ✅ Viết lại — chỉ `@Inject` **8 adapter thô** (4 repository + 4 port) qua token, mỗi method gọi thẳng hàm use case tương ứng, tự truyền các adapter đó làm tham số. Không còn tự chứa luật/DB/transaction/hẹn giờ/sự kiện. Controller vẫn gọi vào đây, KHÔNG gọi thẳng use case — lựa chọn có chủ đích của dự án, không phải sai sót. |
 | `src/game/game.module.ts` | 4 — Frameworks & Drivers (composition root) | ✅ Viết lại — chỉ còn **8 provider** (4 repository Gateway + 4 port Gateway, bind interface Domain/Application → implementation Infrastructure qua token). Use case KHÔNG cần đăng ký provider riêng nữa vì là hàm thuần, không phải class NestJS phải khởi tạo. |
 | `src/app.module.ts`, `src/main.ts` | 4 — Frameworks & Drivers | Không đổi |
 
-### Lưu ý dễ nhầm: `src/game/entities/` KHÔNG phải Domain layer
-
-Tên trùng nhau ("entity") nhưng ý nghĩa khác hẳn:
+### Lưu ý: 2 khái niệm "entity" khác hẳn nhau, giờ đã tách tên rõ ràng
 
 - `src/game/**domain**/entities/game.entity.ts` → class TypeScript thuần, có hành vi
-  (`game.assertInProgress()`, `game.finish(winner)`), **đây là Layer 1**.
-- `src/game/entities/game.entity.ts` (file cũ, có sẵn từ trước) → class có decorator
-  `@Entity()`, `@Column()` của TypeORM, chỉ là **bản đồ ánh xạ tới bảng Postgres**, không có
-  hành vi gì. Đây thực chất là chi tiết kỹ thuật của Layer 4, dù tên gọi theo thói quen NestJS
-  là "entity". Ở bước làm Infrastructure layer sau này, file này nên được đổi tên thành
-  `*.orm-entity.ts` và chuyển vào `src/game/infrastructure/persistence/` để tránh nhầm với
-  Domain entity.
+  (`game.assertInProgress()`, `game.finish(winner)`), **đây là Layer 1**. Giữ đuôi `.entity.ts`.
+- `src/game/infrastructure/persistence/game.**orm**-entity.ts` (trước đây ở
+  `src/game/entities/game.entity.ts`) → class có decorator `@Entity()`, `@Column()` của
+  TypeORM, chỉ là **bản đồ ánh xạ tới bảng Postgres**, không có hành vi gì — chi tiết kỹ thuật
+  của Layer 4. Đã đổi đuôi thành `.orm-entity.ts` và dọn sang `infrastructure/persistence/`
+  đúng như định hướng ghi trước đó, để tên file tự nói lên sự khác biệt thay vì phải nhớ.
+  `RoomsModule` (đọc `Game`/`GameStatus` trong `reconcileStuckRooms()`) và `AppModule`
+  (`TypeOrmModule.forRootAsync`'s `entities: [...]`) cũng trỏ sang đường dẫn mới này.
 
 ## 4. Ví dụ minh hoạ: "Sói bỏ phiếu cắn" đi qua các layer thế nào
 
@@ -131,13 +130,11 @@ khởi động NestJS, không cần Postgres.
 
 1. Lặp lại đúng pattern này (Domain → Application → Interface Adapters) cho `UsersModule`,
    `AuthModule`, `RoomsModule`.
-2. **Nợ kỹ thuật**: `src/game/entities/*.entity.ts` (TypeORM cũ) chưa đổi tên thành
-   `*.orm-entity.ts` và chưa dọn sang `src/game/infrastructure/persistence/` — các adapter mới
-   (mục 3) chỉ đang import chúng nguyên vị trí cũ. Không ảnh hưởng gì tới việc chạy đúng, chỉ là
-   tên gọi "entity" hiện dùng cho 2 khái niệm khác nhau (xem lưu ý ở mục 3) chưa được dọn cho
-   rõ ràng hoàn toàn.
-3. Chưa có unit test tự động cho Domain/Application layer — cả 2 đều là TypeScript thuần nên
-   rất dễ viết test không cần DB/NestJS, nhưng chưa làm ở bước nào trong 3 bước vừa qua.
+2. Chưa có unit test tự động cho Domain/Application layer — cả 2 đều là TypeScript thuần nên
+   rất dễ viết test không cần DB/NestJS, nhưng chưa làm ở bước nào trong các bước vừa qua.
+
+~~Nợ kỹ thuật: đổi tên/dọn `src/game/entities/*.entity.ts` sang
+`src/game/infrastructure/persistence/*.orm-entity.ts`~~ — **đã xử lý**, xem mục 6.
 
 ## 6. Đã kiểm chứng thế nào
 
@@ -154,3 +151,15 @@ Sau đó, khi chuyển 15 use case từ class sang hàm thuần (giảm `game.mo
 API lại đúng quy trình trên để xác nhận không có gì hỏng theo — bao gồm cả đường gọi
 `castWolfVote → getVoteTally` (2 hàm gọi trực tiếp nhau, không qua DI) trả đúng 404 qua
 `GameDomainExceptionFilter` như trước khi đổi.
+
+Sau đó nữa, dọn nợ kỹ thuật đổi tên/di chuyển 4 file entity ORM (`git mv` giữ lịch sử) sang
+`src/game/infrastructure/persistence/*.orm-entity.ts`, sửa toàn bộ nơi import theo — **kể cả
+2 file ngoài `GameModule`**: `src/app.module.ts` (danh sách `entities: [...]` của
+`TypeOrmModule.forRootAsync`) và `src/rooms/rooms.module.ts`/`rooms.service.ts` (RoomsModule
+đọc bảng `games` trong `reconcileStuckRooms()`). Tiện thể xoá luôn
+`src/game/constants/timing.ts`/`factions.ts` — 2 file này hết người dùng từ khi `GameService`
+được viết lại ở bước nối Application layer, chỉ còn được nhắc tới trong comment "TẠM THỜI trùng
+lặp" của domain layer (nay cũng đã xoá comment đó). Xác nhận bằng `pnpm run build` sạch, sau đó
+boot lại lần nữa qua Postgres và gọi cả 2 luồng (tạo phòng — qua `RoomsModule`'s `Game` repo, và
+endpoint ván chơi lỗi — qua `GameModule`) để chắc cả 2 module dùng entity đã di chuyển đều chạy
+đúng.

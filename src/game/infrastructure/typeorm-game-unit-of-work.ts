@@ -1,9 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { Game as GameOrmEntity } from '../entities/game.entity';
-import { GamePlayer as GamePlayerOrmEntity } from '../entities/game-player.entity';
-import { GameVote as GameVoteOrmEntity } from '../entities/game-vote.entity';
-import { GameAction as GameActionOrmEntity } from '../entities/game-action.entity';
+import { Game as GameOrmEntity } from './persistence/game.orm-entity';
+import { GamePlayer as GamePlayerOrmEntity } from './persistence/game-player.orm-entity';
+import { GameVote as GameVoteOrmEntity } from './persistence/game-vote.orm-entity';
+import { GameAction as GameActionOrmEntity } from './persistence/game-action.orm-entity';
 import {
   GameUnitOfWork,
   GameTransactionalRepositories,

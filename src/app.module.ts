@@ -15,10 +15,10 @@ import { User } from './users/entities/user.entity';
 import { UserSession } from './auth/entities/user-session.entity';
 import { Room } from './rooms/entities/room.entity';
 import { RoomMember } from './rooms/entities/room-member.entity';
-import { Game } from './game/entities/game.entity';
-import { GamePlayer } from './game/entities/game-player.entity';
-import { GameVote } from './game/entities/game-vote.entity';
-import { GameAction } from './game/entities/game-action.entity';
+import { Game } from './game/infrastructure/persistence/game.orm-entity';
+import { GamePlayer } from './game/infrastructure/persistence/game-player.orm-entity';
+import { GameVote } from './game/infrastructure/persistence/game-vote.orm-entity';
+import { GameAction } from './game/infrastructure/persistence/game-action.orm-entity';
 
 @Module({
   imports: [

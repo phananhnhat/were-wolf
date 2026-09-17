@@ -1,5 +1,5 @@
 import { Repository } from 'typeorm';
-import { GameVote as GameVoteOrmEntity } from '../../entities/game-vote.entity';
+import { GameVote as GameVoteOrmEntity } from './game-vote.orm-entity';
 import { GameVote } from '../../domain/entities/game-vote.entity';
 import { GameId } from '../../domain/value-objects/game-id.vo';
 import { PlayerId } from '../../domain/value-objects/player-id.vo';

@@ -8,9 +8,9 @@ import {
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm';
-import { Game } from './game.entity';
-import { User } from '../../users/entities/user.entity';
-import { GameActionType } from '../constants/actions';
+import { Game } from './game.orm-entity';
+import { User } from '../../../users/entities/user.entity';
+import { GameActionType } from '../../constants/actions';
 
 // 1 dòng = 1 lần dùng kỹ năng của vai đặc biệt.
 //

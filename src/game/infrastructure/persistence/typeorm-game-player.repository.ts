@@ -1,5 +1,5 @@
 import { Repository } from 'typeorm';
-import { GamePlayer as GamePlayerOrmEntity } from '../../entities/game-player.entity';
+import { GamePlayer as GamePlayerOrmEntity } from './game-player.orm-entity';
 import { GamePlayer } from '../../domain/entities/game-player.entity';
 import { GameId } from '../../domain/value-objects/game-id.vo';
 import { PlayerId } from '../../domain/value-objects/player-id.vo';

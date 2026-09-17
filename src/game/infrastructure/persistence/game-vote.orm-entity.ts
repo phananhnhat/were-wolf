@@ -8,8 +8,8 @@ import {
   Unique,
   UpdateDateColumn,
 } from 'typeorm';
-import { Game, GamePhase } from './game.entity';
-import { User } from '../../users/entities/user.entity';
+import { Game, GamePhase } from './game.orm-entity';
+import { User } from '../../../users/entities/user.entity';
 
 // 1 dòng = phiếu bầu hiện tại của 1 người trong 1 lượt (gameId + phase + dayNumber).
 // UNIQUE đảm bảo mỗi người chỉ có 1 phiếu hiệu lực/lượt — đổi phiếu là UPDATE dòng này,
