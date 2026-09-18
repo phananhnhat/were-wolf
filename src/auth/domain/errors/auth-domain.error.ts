@@ -1,3 +1,5 @@
+import { BaseDomainError } from '../../../common/domain-error';
+
 export type AuthDomainErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
@@ -5,12 +7,8 @@ export type AuthDomainErrorCode =
   | 'BAD_REQUEST'
   | 'UNAUTHORIZED';
 
-export abstract class AuthDomainError extends Error {
-  protected constructor(
-    readonly code: AuthDomainErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = new.target.name;
+export abstract class AuthDomainError extends BaseDomainError {
+  protected constructor(code: AuthDomainErrorCode, message: string) {
+    super(code, message);
   }
 }

@@ -10,22 +10,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import type { Response } from 'express';
-
-// Hợp của mọi mã lỗi domain đang dùng ở các module (mỗi module chỉ throw 1 tập con —
-// UserDomainErrorCode/GameDomainErrorCode không có UNAUTHORIZED/INTERNAL chẳng hạn — nhưng
-// switch ở dưới xử lý đủ cả 6 nên không cần lặp lại theo từng module).
-export type DomainErrorCode =
-  | 'NOT_FOUND'
-  | 'CONFLICT'
-  | 'FORBIDDEN'
-  | 'BAD_REQUEST'
-  | 'UNAUTHORIZED'
-  | 'INTERNAL';
-
-export interface DomainError {
-  readonly code: DomainErrorCode;
-  readonly message: string;
-}
+import type { DomainError } from './domain-error';
 
 // Base dùng chung cho mọi *DomainExceptionFilter của từng module — dịch DomainError.code sang
 // đúng HttpException. Mỗi module chỉ cần `@Catch(XxxDomainError) class XxxDomainExceptionFilter

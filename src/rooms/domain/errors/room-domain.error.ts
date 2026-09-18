@@ -1,3 +1,5 @@
+import { BaseDomainError } from '../../../common/domain-error';
+
 export type RoomDomainErrorCode =
   | 'NOT_FOUND'
   | 'CONFLICT'
@@ -5,12 +7,8 @@ export type RoomDomainErrorCode =
   | 'BAD_REQUEST'
   | 'INTERNAL';
 
-export abstract class RoomDomainError extends Error {
-  protected constructor(
-    readonly code: RoomDomainErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = new.target.name;
+export abstract class RoomDomainError extends BaseDomainError {
+  protected constructor(code: RoomDomainErrorCode, message: string) {
+    super(code, message);
   }
 }

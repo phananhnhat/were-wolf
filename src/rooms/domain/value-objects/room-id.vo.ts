@@ -1,18 +1,8 @@
-export class RoomId {
-  private constructor(private readonly value: number) {}
+import { NumericId, assertPositiveInteger } from '../../../common/numeric-id';
 
+export class RoomId extends NumericId<RoomId> {
   static of(value: number): RoomId {
-    if (!Number.isInteger(value) || value <= 0) {
-      throw new Error(`RoomId không hợp lệ: ${value}`);
-    }
+    assertPositiveInteger(value, 'RoomId');
     return new RoomId(value);
-  }
-
-  toNumber(): number {
-    return this.value;
-  }
-
-  equals(other: RoomId): boolean {
-    return this.value === other.value;
   }
 }
