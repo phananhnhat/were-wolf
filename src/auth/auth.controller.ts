@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Post,
   Req,
+  UseFilters,
   UseGuards,
 } from '@nestjs/common';
 import type { RequestWithSession } from './strategies/jwt-refresh.strategy';
@@ -15,9 +16,13 @@ import { LogoutDto } from './dto/logout.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
+import type { AuthenticatedUser } from './decorators/current-user.decorator';
 import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
-import { User } from '../users/entities/user.entity';
+import { AuthDomainExceptionFilter } from './infrastructure/auth-domain-exception.filter';
 
+// AuthModule không còn ném lỗi domain của UsersModule ra ngoài nữa — changePassword() dùng
+// UserDirectory (port riêng của AuthModule) nên chỉ cần 1 filter.
+@UseFilters(AuthDomainExceptionFilter)
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -42,9 +47,9 @@ export class AuthController {
   refresh(
     // @CurrentUser() đọc req.user
     // Luồng: JwtRefreshGuard chạy → gọi JwtRefreshStrategy.validate()
-    //        validate() tìm user trong DB, return user → Passport gắn vào req.user
+    //        validate() tìm user trong DB, return danh tính rút gọn → Passport gắn vào req.user
     //        @CurrentUser() chỉ là shortcut lấy req.user ra thành param
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
 
     // @Req() inject toàn bộ Express Request object vào đây
     // JwtRefreshStrategy.validate() đã gắn thêm: (req as any).sessionId = payload.sid
@@ -56,13 +61,16 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  logout(@CurrentUser() user: User, @Body() dto: LogoutDto) {
+  logout(@CurrentUser() user: AuthenticatedUser, @Body() dto: LogoutDto) {
     return this.authService.logout(user.id, dto.refreshToken);
   }
 
   @Post('change-password')
   @HttpCode(HttpStatus.OK)
-  changePassword(@CurrentUser() user: User, @Body() dto: ChangePasswordDto) {
+  changePassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ChangePasswordDto,
+  ) {
     return this.authService.changePassword(user.id, dto);
   }
 }

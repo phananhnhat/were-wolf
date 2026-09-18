@@ -1,7 +1,6 @@
 # Clean Architecture cho dự án Werewolf API
 
-Tài liệu giải thích mô hình Clean Architecture đang được áp dụng dần vào dự án, bắt đầu từ
-`GameModule`. Xem code đã tạo ở `src/game/domain/`.
+Tài liệu giải thích mô hình Clean Architecture của dự án.
 
 ---
 
@@ -128,13 +127,18 @@ khởi động NestJS, không cần Postgres.
 
 ## 5. Việc còn lại (chưa làm)
 
-1. Lặp lại đúng pattern này (Domain → Application → Interface Adapters) cho `UsersModule`,
-   `AuthModule`, `RoomsModule`.
-2. Chưa có unit test tự động cho Domain/Application layer — cả 2 đều là TypeScript thuần nên
-   rất dễ viết test không cần DB/NestJS, nhưng chưa làm ở bước nào trong các bước vừa qua.
+1. Chưa có unit test tự động cho Domain/Application layer ở bất kỳ module nào — tất cả đều là
+   TypeScript thuần nên rất dễ viết test không cần DB/NestJS, nhưng chưa làm.
+2. `src/{users,auth,rooms}/entities/*.entity.ts` (TypeORM cũ của 3 module này) chưa đổi tên
+   thành `*.orm-entity.ts`/chưa dọn sang `infrastructure/persistence/` — cố ý để lại, giống
+   GameModule ở lượt đầu (xem mục 7), tránh blast radius quá lớn (các file này bị nhiều module
+   khác tham chiếu: `User` bị `GamePlayer`/`GameVote`/`GameAction`/`RoomMember` import).
 
 ~~Nợ kỹ thuật: đổi tên/dọn `src/game/entities/*.entity.ts` sang
 `src/game/infrastructure/persistence/*.orm-entity.ts`~~ — **đã xử lý**, xem mục 6.
+
+~~Lặp lại pattern Clean Architecture cho `UsersModule`, `AuthModule`, `RoomsModule`~~ — **đã
+xong**, xem mục 7.
 
 ## 6. Đã kiểm chứng thế nào
 
@@ -171,3 +175,56 @@ constructor — cho đồng bộ với cách 4 port Gateway đã làm, và để
 TypeOrmGameRepository(manager.getRepository(...))` bình thường bên trong transaction — decorator
 trên constructor chỉ ảnh hưởng lúc NestJS tự khởi tạo qua DI, không ảnh hưởng lúc gọi `new` tay.
 Xác nhận lại bằng build + boot + gọi API y hệt quy trình trên.
+
+## 7. UsersModule, AuthModule, RoomsModule
+
+Áp dụng đúng pattern đã chốt ở `GameModule` (mục 1-6) cho 3 module còn lại, làm cả 3 trong 1
+lượt (không tách nhỏ theo từng bước như GameModule — 3 module này nhỏ hơn nhiều). Cấu trúc thư
+mục giống hệt: `domain/{value-objects,entities,enums,errors,repositories,services}` →
+`application/{use-cases,ports}` (hàm thuần, không phải class) → `infrastructure/persistence` +
+`infrastructure/*.adapter.ts` + `*-domain-exception.filter.ts` → Facade (`*.service.ts`, giữ
+nguyên chữ ký public) + Controller (chỉ thêm `@UseFilters(...)`) + `*.module.ts`.
+
+**Quyết định thiết kế đáng chú ý (khác GameModule, riêng cho lượt này):**
+
+- **`AuthenticatedUser`** (`auth/decorators/current-user.decorator.ts`) thay cho việc
+  `@CurrentUser()` từng trả thẳng ORM `User` entity — nay chỉ `{id, username}`. Lý do: nếu để
+  `@CurrentUser()` trả `User` (Domain entity của UsersModule), mọi controller khác
+  (`RoomsController`, `GameController`) vô tình phải biết Domain entity của module khác chỉ để
+  đọc `req.user`. Tách riêng 1 type nhẹ, không thuộc module nào, giải quyết dứt điểm.
+- **Facade-là-Presenter**: `UsersService`/`RoomsService` không trả thẳng Domain entity qua HTTP
+  mà map sang DTO thuần (`UserResponseDto`, `RoomResponseDto`, `RoomDetailResponseDto`) — vì (1)
+  Value Object serialize JSON sai dạng (`RoomCode` sẽ ra `{value:"ABCD"}` thay vì `"ABCD"` nếu
+  trả thẳng), và (2) Domain entity mang field nhạy cảm không có `@Exclude()` bảo vệ
+  (`User.passwordHash`). Điểm tinh tế: `RoomMemberResponseDto` giữ lại `id` (PK riêng của dòng
+  `room_members`, không phải PK của `User`) — vì response gốc trả field này, nên đọc qua 1
+  read-model riêng `RoomMemberWithUser` (không phải Domain entity `RoomMember` thuần) để không
+  mất field đó.
+- **`GameStatusReader` — port hẹp do bên dùng (Rooms) tự định nghĩa**, không tái dùng
+  `GameRepository` interface đầy đủ của GameModule. Chỉ 1 method:
+  `hasActiveGame(roomId): Promise<boolean>`. Cách này tránh việc GameModule phải export token ra
+  ngoài chỉ để phục vụ 1 câu hỏi rất hẹp, và tránh tạo phụ thuộc module thật giữa 2 module vốn
+  chỉ nên nói chuyện qua event (`room.started`/`game.finished`/`game.start_failed`).
+  Implementation (`typeorm-game-status-reader.ts`) nằm trong `rooms/infrastructure/`, tự
+  `@InjectRepository` thẳng vào ORM entity của GameModule — chỉ Infrastructure layer của Rooms
+  mới biết GameModule tồn tại, Domain/Application của Rooms thì không.
+- **`UserDirectory` — port hẹp do bên dùng (Auth) tự định nghĩa** (sửa lại sau khi phát hiện vi
+  phạm Dependency Rule — xem "Sửa lại" bên dưới): ban đầu `AuthModule` cho Domain/Application/
+  Facade/2 Strategy của chính nó import thẳng `UserRepository` (port) + `User` (entity) +
+  `UserId` (VO) từ `users/domain/*` — tái dùng Application layer của module khác, giống lỗi mà
+  `GameStatusReader` đã tránh được cho Rooms↔Game. Sửa lại theo đúng pattern đó: `AuthModule` tự
+  định nghĩa port riêng `UserDirectory` (`auth/application/ports/user-directory.ts` — chỉ có
+  `findByUsername/findByEmail/findById/create/updatePasswordHash`, làm việc với
+  `AuthUserRecord {id, username, passwordHash}` — kiểu dữ liệu của riêng AuthModule, không phải
+  `User` domain entity của UsersModule). **Chỉ 1 file** trong toàn AuthModule được phép biết
+  UsersModule tồn tại: `auth/infrastructure/user-directory.adapter.ts`
+  (`TypeOrmUserDirectory implements UserDirectory`), tự `@Inject(USER_REPOSITORY)` port của
+  UsersModule bên trong, dịch qua lại `User` ↔ `AuthUserRecord`. Nhờ vậy không có 2 cài đặt
+  TypeORM độc lập cùng ghi bảng `users` (khác GameStatusReader — nó chỉ đọc, không ghi, nên tự
+  `@InjectRepository` thẳng cũng an toàn; ở đây Auth cần ghi — tạo user mới lúc đăng ký, đổi
+  passwordHash lúc đổi mật khẩu — nên phải đi qua `UserRepository` sẵn có của UsersModule để
+  chỉ có 1 nguồn sự thật). Tác dụng phụ tốt: `changeUserPassword` giờ ném lỗi CỦA AuthModule
+  (`AuthUserNotFoundError`) thay vì `UserNotFoundError` của UsersModule, nên `AuthController` bỏ
+  được `UserDomainExceptionFilter` thứ 2, chỉ còn `AuthDomainExceptionFilter`.
+  `UsersModule.exports` vẫn giữ `USER_REPOSITORY` bên cạnh `UsersService` — nhưng giờ chỉ có 1
+  nơi duy nhất (`user-directory.adapter.ts`) import nó, thay vì rải rác 6 file.

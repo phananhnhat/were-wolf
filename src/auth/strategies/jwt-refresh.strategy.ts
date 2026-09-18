@@ -1,18 +1,21 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import type { Request } from 'express';
+import { USER_DIRECTORY } from '../application/ports/user-directory';
+import { SESSION_REPOSITORY } from '../domain/repositories/session.repository';
+import { PASSWORD_HASHER } from '../application/ports/password-hasher';
+import { validateRefreshSession } from '../application/use-cases/validate-refresh-session.use-case';
+import type { UserDirectory } from '../application/ports/user-directory';
+import type { SessionRepository } from '../domain/repositories/session.repository';
+import type { PasswordHasher } from '../application/ports/password-hasher';
+import type { AuthenticatedUser } from '../decorators/current-user.decorator';
+import type { RefreshTokenPayload } from '../application/ports/token-issuer';
 
 export interface RequestWithSession extends Request {
   sessionId: string;
 }
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import * as bcryptjs from 'bcryptjs';
-import { UsersService } from '../../users/users.service';
-import { RefreshPayload } from './jwt.strategy';
-import { UserSession } from '../entities/user-session.entity';
 
 @Injectable()
 export class JwtRefreshStrategy extends PassportStrategy(
@@ -21,9 +24,9 @@ export class JwtRefreshStrategy extends PassportStrategy(
 ) {
   constructor(
     config: ConfigService,
-    private readonly usersService: UsersService,
-    @InjectRepository(UserSession)
-    private readonly sessionsRepo: Repository<UserSession>,
+    @Inject(USER_DIRECTORY) private readonly users: UserDirectory,
+    @Inject(SESSION_REPOSITORY) private readonly sessions: SessionRepository,
+    @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasher,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -32,25 +35,24 @@ export class JwtRefreshStrategy extends PassportStrategy(
     });
   }
 
-  async validate(req: RequestWithSession, payload: RefreshPayload) {
+  async validate(
+    req: RequestWithSession,
+    payload: RefreshTokenPayload,
+  ): Promise<AuthenticatedUser> {
     const rawToken = req.headers.authorization?.split(' ')[1];
     if (!rawToken) throw new UnauthorizedException();
 
-    const session = await this.sessionsRepo.findOneBy({
-      id: payload.sid,
-      userId: payload.sub,
-    });
-    if (!session) throw new UnauthorizedException();
-
-    if (session.expiresAt < new Date()) throw new UnauthorizedException();
-
-    const matches = await bcryptjs.compare(rawToken, session.tokenHash);
-    if (!matches) throw new UnauthorizedException();
-
-    const user = await this.usersService.findOne(payload.sub).catch(() => null);
+    const user = await validateRefreshSession(
+      this.users,
+      this.sessions,
+      this.hasher,
+      payload.sub,
+      payload.sid,
+      rawToken,
+    ).catch(() => null);
     if (!user) throw new UnauthorizedException();
 
     req.sessionId = payload.sid;
-    return user;
+    return { id: user.id, username: user.username };
   }
 }

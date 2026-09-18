@@ -5,12 +5,15 @@ import {
   Param,
   ParseIntPipe,
   Put,
+  UseFilters,
 } from '@nestjs/common';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { User } from './entities/user.entity';
+import type { AuthenticatedUser } from '../auth/decorators/current-user.decorator';
+import { UserDomainExceptionFilter } from './infrastructure/user-domain-exception.filter';
 
+@UseFilters(UserDomainExceptionFilter)
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
@@ -27,7 +30,7 @@ export class UsersController {
 
   @Put(':id')
   update(
-    @CurrentUser() user: User,
+    @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateUserDto,
   ) {
