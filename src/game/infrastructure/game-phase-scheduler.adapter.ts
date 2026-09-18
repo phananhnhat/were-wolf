@@ -4,12 +4,14 @@ import { GameId } from '../domain/value-objects/game-id.vo';
 import { GamePhaseScheduler } from '../application/ports/game-phase-scheduler';
 import { GAME_UNIT_OF_WORK } from '../application/ports/game-unit-of-work';
 import { GAME_EVENT_PUBLISHER } from '../application/ports/game-event-publisher';
+import { REALTIME_GAME_PUBLISHER } from '../application/ports/realtime-game-publisher';
 import { advanceGame } from '../application/use-cases/advance-game.use-case';
 
 // import type — xem ghi chú ở game.service.ts (TS1272: @Inject() cần type constructor param
 // không tồn tại lúc runtime).
 import type { GameUnitOfWork } from '../application/ports/game-unit-of-work';
 import type { GameEventPublisher } from '../application/ports/game-event-publisher';
+import type { RealtimeGamePublisher } from '../application/ports/realtime-game-publisher';
 
 // Gateway — implement GamePhaseScheduler bằng SchedulerRegistry của @nestjs/schedule. Logic
 // schedule()/cancel() y hệt schedulePhase()/cancelPhase() cũ trong game.service.ts.
@@ -29,6 +31,8 @@ export class GamePhaseSchedulerAdapter implements GamePhaseScheduler {
     @Inject(GAME_UNIT_OF_WORK) private readonly unitOfWork: GameUnitOfWork,
     @Inject(GAME_EVENT_PUBLISHER)
     private readonly eventPublisher: GameEventPublisher,
+    @Inject(REALTIME_GAME_PUBLISHER)
+    private readonly realtime: RealtimeGamePublisher,
   ) {}
 
   schedule(gameId: GameId, durationMs: number): void {
@@ -39,6 +43,7 @@ export class GamePhaseSchedulerAdapter implements GamePhaseScheduler {
         this.unitOfWork,
         this,
         this.eventPublisher,
+        this.realtime,
         gameId.toNumber(),
       ).catch((err) => {
         this.logger.error(

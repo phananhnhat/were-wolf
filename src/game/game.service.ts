@@ -8,6 +8,7 @@ import { GAME_ACTION_REPOSITORY } from './domain/repositories/game-action.reposi
 import { GAME_UNIT_OF_WORK } from './application/ports/game-unit-of-work';
 import { GAME_PHASE_SCHEDULER } from './application/ports/game-phase-scheduler';
 import { GAME_EVENT_PUBLISHER } from './application/ports/game-event-publisher';
+import { REALTIME_GAME_PUBLISHER } from './application/ports/realtime-game-publisher';
 import { GAME_LOGGER } from './application/ports/logger';
 
 // `import type` — @Inject() bật emitDecoratorMetadata cho constructor, TS cần các type này
@@ -19,6 +20,7 @@ import type { GameActionRepository } from './domain/repositories/game-action.rep
 import type { GameUnitOfWork } from './application/ports/game-unit-of-work';
 import type { GamePhaseScheduler } from './application/ports/game-phase-scheduler';
 import type { GameEventPublisher } from './application/ports/game-event-publisher';
+import type { RealtimeGamePublisher } from './application/ports/realtime-game-publisher';
 import type { Logger } from './application/ports/logger';
 
 import { getGameState } from './application/use-cases/get-game-state.use-case';
@@ -60,6 +62,8 @@ export class GameService {
     private readonly scheduler: GamePhaseScheduler,
     @Inject(GAME_EVENT_PUBLISHER)
     private readonly eventPublisher: GameEventPublisher,
+    @Inject(REALTIME_GAME_PUBLISHER)
+    private readonly realtime: RealtimeGamePublisher,
     @Inject(GAME_LOGGER) private readonly logger: Logger,
   ) {}
 
@@ -70,6 +74,7 @@ export class GameService {
       this.unitOfWork,
       this.scheduler,
       this.eventPublisher,
+      this.realtime,
       this.logger,
       payload,
     );
@@ -159,6 +164,7 @@ export class GameService {
       this.games,
       this.players,
       this.votes,
+      this.realtime,
       gameId,
       voterId,
       targetUserId,
@@ -170,6 +176,7 @@ export class GameService {
       this.games,
       this.players,
       this.votes,
+      this.realtime,
       gameId,
       voterId,
       targetUserId,

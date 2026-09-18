@@ -8,6 +8,7 @@ import { GameVote } from '../../domain/entities/game-vote.entity';
 import { GameRulesService } from '../../domain/services/game-rules.service';
 import { GameNotFoundError } from '../../domain/errors/game-not-found.error';
 import { PlayerNotInGameError } from '../../domain/errors/player-not-in-game.error';
+import { RealtimeGamePublisher } from '../ports/realtime-game-publisher';
 import { getVoteTally, VoteTallyOutput } from './get-vote-tally.use-case';
 
 // Sói bỏ/đổi phiếu chọn nạn nhân — chỉ dùng được ở pha NIGHT. Gọi lại nhiều lần trong cùng
@@ -16,6 +17,7 @@ export async function castWolfVote(
   games: GameRepository,
   players: GamePlayerRepository,
   votes: GameVoteRepository,
+  realtime: RealtimeGamePublisher,
   gameId: number,
   voterId: number,
   targetUserId: number,
@@ -58,6 +60,10 @@ export async function castWolfVote(
       ),
     );
   }
+
+  // Không đẩy thẳng tally qua MQTT (chỉ Sói xem được) — chỉ báo "có gì đổi", client tự gọi lại
+  // REST wolf/votes như cũ để lấy tally thật. Xem PLAN-REALTIME.md mục 7.
+  realtime.pingWolfVotes(game.roomId, gameId, game.dayNumber);
 
   return getVoteTally(games, players, votes, gameId, voterId, {
     phase: GamePhase.NIGHT,

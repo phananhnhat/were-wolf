@@ -33,6 +33,10 @@ Required at startup (loaded via `@nestjs/config`):
 | `JWT_ACCESS_EXPIRES_IN` | Access token TTL (default: `15m`) |
 | `JWT_REFRESH_EXPIRES_IN` | Refresh token TTL (default: `7d`) |
 | `PORT` | HTTP port (default: `3000`) |
+| `MQTT_URL` | URL the backend's own MQTT publisher connects to (default: `mqtt://localhost:1883`) |
+| `MQTT_TCP_PORT` | Port the embedded Aedes broker listens on for raw TCP (mobile/native) clients (default: `1883`) |
+| `MQTT_WS_PORT` | Port the embedded Aedes broker listens on for MQTT-over-WebSocket (browser) clients (default: `8083`) |
+| `MQTT_INTERNAL_PASSWORD` | Shared secret the backend's own MQTT publisher uses to authenticate with the embedded broker (not a JWT) |
 
 ## Architecture
 
@@ -63,3 +67,7 @@ Required at startup (loaded via `@nestjs/config`):
 ### `@CurrentUser()` decorator
 
 `src/auth/decorators/current-user.decorator.ts` — extracts the authenticated user (populated by Passport into `req.user`) as a method parameter. Available on any non-public route.
+
+### Realtime (MQTT)
+
+`src/realtime/` hosts an **Aedes** MQTT broker embedded directly in the NestJS process (`MqttBrokerService`, `OnModuleInit`) — a temporary stand-in for a self-hosted EMQX, used while the realtime logic is being built out (see `PLAN-REALTIME.md`). Actions (vote, seer check, guardian protect, witch poison/heal) still go 100% through REST — MQTT is a **push-only** channel `GameModule`'s use cases (`start-game`, `advance-game`, `cast-wolf-vote`, `cast-lynch-vote`) publish to after a DB transaction commits, via the `RealtimeGamePublisher` port (`src/game/application/ports/realtime-game-publisher.ts`) and its `mqtt`-client adapter. Clients authenticate on CONNECT with their access token as the MQTT password; `authorizeSubscribe` only allows subscribing to `ww/room/{roomId}/...` topics for rooms the connecting user is actually a member of (checked via `RoomMembershipReader`).

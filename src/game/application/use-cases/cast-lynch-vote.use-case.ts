@@ -8,6 +8,7 @@ import { GameVote } from '../../domain/entities/game-vote.entity';
 import { GameRulesService } from '../../domain/services/game-rules.service';
 import { GameNotFoundError } from '../../domain/errors/game-not-found.error';
 import { PlayerNotInGameError } from '../../domain/errors/player-not-in-game.error';
+import { RealtimeGamePublisher } from '../ports/realtime-game-publisher';
 import { getVoteTally, VoteTallyOutput } from './get-vote-tally.use-case';
 
 // Cả làng bỏ/đổi phiếu treo cổ — chỉ dùng được ở pha DAY. Gọi lại nhiều lần trong cùng lượt =
@@ -17,6 +18,7 @@ export async function castLynchVote(
   games: GameRepository,
   players: GamePlayerRepository,
   votes: GameVoteRepository,
+  realtime: RealtimeGamePublisher,
   gameId: number,
   voterId: number,
   targetUserId: number,
@@ -49,8 +51,17 @@ export async function castLynchVote(
     );
   }
 
-  return getVoteTally(games, players, votes, gameId, voterId, {
+  // Tally treo cổ công khai — đẩy thẳng qua MQTT, ai trong ván cũng xem được (đúng luật REST
+  // hiện có). KHÔNG kèm myVoteTargetId của result — field đó riêng của voterId, phát đi cho cả
+  // phòng sẽ sai nghĩa với người nhận khác.
+  const result = await getVoteTally(games, players, votes, gameId, voterId, {
     phase: GamePhase.DAY,
     wolfOnly: false,
   });
+  realtime.publishLynchVotes(game.roomId, {
+    gameId,
+    dayNumber: result.dayNumber,
+    tally: result.tally,
+  });
+  return result;
 }

@@ -10,6 +10,7 @@ import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { GameModule } from './game/game.module';
+import { RealtimeModule } from './realtime/realtime.module';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { User } from './users/entities/user.entity';
 import { UserSession } from './auth/entities/user-session.entity';
@@ -98,6 +99,7 @@ import { GameAction } from './game/infrastructure/persistence/game-action.orm-en
     AuthModule,
     RoomsModule,
     GameModule,
+    RealtimeModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: JwtAuthGuard }],

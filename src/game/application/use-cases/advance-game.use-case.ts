@@ -15,12 +15,24 @@ import {
 } from '../ports/game-unit-of-work';
 import { GamePhaseScheduler } from '../ports/game-phase-scheduler';
 import { GameEventPublisher } from '../ports/game-event-publisher';
+import { RealtimeGamePublisher } from '../ports/realtime-game-publisher';
+import {
+  GameStateView,
+  toGameStateView,
+} from '../read-models/game-state.read-model';
 
 // Ván vừa kết thúc (cần phát sự kiện SAU KHI transaction đã commit), hoặc ván tiếp tục sang 1
-// pha mới (cần hẹn giờ cho pha đó).
+// pha mới (cần hẹn giờ cho pha đó). Cả 2 nhánh đều mang sẵn `state` (đã build trong transaction,
+// từ đúng `players` vừa được cập nhật) để đẩy realtime SAU KHI transaction commit, không phải
+// đọc lại DB — xem PLAN-REALTIME.md mục 6.
 type AdvanceOutcome =
-  | { type: 'finished'; roomId: number }
-  | { type: 'continued'; phase: GamePhase };
+  | { type: 'finished'; roomId: number; state: GameStateView }
+  | {
+      type: 'continued';
+      phase: GamePhase;
+      roomId: number;
+      state: GameStateView;
+    };
 
 // Hết giờ một pha: NIGHT → SKILL (nếu còn Phù thuỷ sống, ngược lại xử lý cái chết và mở luôn
 // DAY) → SKILL đóng thì xử lý cái chết rồi mở DAY → DAY đóng thì treo cổ rồi mở NIGHT (lượt
@@ -35,6 +47,7 @@ export async function advanceGame(
   unitOfWork: GameUnitOfWork,
   scheduler: GamePhaseScheduler,
   eventPublisher: GameEventPublisher,
+  realtime: RealtimeGamePublisher,
   gameId: number,
 ): Promise<void> {
   const gid = GameId.of(gameId);
@@ -59,14 +72,14 @@ export async function advanceGame(
         game.isPhase(GamePhase.NIGHT) &&
         GameRulesService.hasAliveWitch(players)
       ) {
-        return advanceToPhase(repos, game, GamePhase.SKILL);
+        return advanceToPhase(repos, game, players, GamePhase.SKILL);
       }
 
       if (game.isPhase(GamePhase.NIGHT) || game.isPhase(GamePhase.SKILL)) {
         await resolveNightDeaths(repos, game, players);
         const winner = WinConditionService.decideWinner(players);
-        if (winner) return settleGame(repos, game, winner);
-        return advanceToPhase(repos, game, GamePhase.DAY);
+        if (winner) return settleGame(repos, game, players, winner);
+        return advanceToPhase(repos, game, players, GamePhase.DAY);
       }
 
       // DAY
@@ -79,14 +92,18 @@ export async function advanceGame(
       if (dead) await repos.players.save(dead);
 
       const winner = WinConditionService.decideWinner(players);
-      if (winner) return settleGame(repos, game, winner);
+      if (winner) return settleGame(repos, game, players, winner);
 
       game.incrementDay();
-      return advanceToPhase(repos, game, GamePhase.NIGHT);
+      return advanceToPhase(repos, game, players, GamePhase.NIGHT);
     },
   );
 
   if (!outcome) return; // ván không còn chạy, hoặc bị chặn bởi chốt bắn trùng
+
+  // Đẩy realtime trước — kể cả nhánh 'finished', client cần thấy state cuối cùng (vai lộ hết,
+  // winner đã có) ngay khi ván kết thúc, không phải đợi round-trip REST tiếp theo.
+  realtime.publishState(outcome.roomId, outcome.state);
 
   if (outcome.type === 'finished') {
     scheduler.cancel(gid);
@@ -99,21 +116,32 @@ export async function advanceGame(
 async function advanceToPhase(
   repos: GameTransactionalRepositories,
   game: Game,
+  players: GamePlayer[],
   phase: GamePhase,
 ): Promise<AdvanceOutcome> {
   game.advanceToPhase(phase, new Date(Date.now() + PHASE_DURATION_MS[phase]));
   await repos.games.save(game);
-  return { type: 'continued', phase };
+  return {
+    type: 'continued',
+    phase,
+    roomId: game.roomId,
+    state: toGameStateView(game, players),
+  };
 }
 
 async function settleGame(
   repos: GameTransactionalRepositories,
   game: Game,
+  players: GamePlayer[],
   winner: GameWinner,
 ): Promise<AdvanceOutcome> {
   game.finish(winner);
   await repos.games.save(game);
-  return { type: 'finished', roomId: game.roomId };
+  return {
+    type: 'finished',
+    roomId: game.roomId,
+    state: toGameStateView(game, players),
+  };
 }
 
 // Áp dụng toàn bộ cái chết của một đêm — Sói cắn (trừ Bảo vệ che, trừ thuốc cứu) và thuốc độc

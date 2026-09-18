@@ -14,6 +14,7 @@ import { GAME_ACTION_REPOSITORY } from './domain/repositories/game-action.reposi
 import { GAME_UNIT_OF_WORK } from './application/ports/game-unit-of-work';
 import { GAME_PHASE_SCHEDULER } from './application/ports/game-phase-scheduler';
 import { GAME_EVENT_PUBLISHER } from './application/ports/game-event-publisher';
+import { REALTIME_GAME_PUBLISHER } from './application/ports/realtime-game-publisher';
 import { GAME_LOGGER } from './application/ports/logger';
 
 import { TypeOrmGameRepository } from './infrastructure/persistence/typeorm-game.repository';
@@ -23,12 +24,14 @@ import { TypeOrmGameActionRepository } from './infrastructure/persistence/typeor
 import { TypeOrmGameUnitOfWork } from './infrastructure/typeorm-game-unit-of-work';
 import { GamePhaseSchedulerAdapter } from './infrastructure/game-phase-scheduler.adapter';
 import { GameEventPublisherAdapter } from './infrastructure/game-event-publisher.adapter';
+import { MqttRealtimeGamePublisherAdapter } from './infrastructure/mqtt-realtime-game-publisher.adapter';
 import { LoggerAdapter } from './infrastructure/logger.adapter';
 
-// Composition root của GameModule — nơi DUY NHẤT "biết" cả 4 layer cùng lúc. 8 provider (4
-// repository Gateway + 4 port Gateway), tất cả đều `@Injectable()` nên chỉ cần `useClass` — mỗi
-// adapter tự khai deps của nó qua constructor (`@InjectRepository(...)` cho 4 cái đầu, các
-// service NestJS chuẩn như DataSource/SchedulerRegistry/EventEmitter2 cho 4 cái sau).
+// Composition root của GameModule — nơi DUY NHẤT "biết" cả 4 layer cùng lúc. 9 provider (4
+// repository Gateway + 5 port Gateway, cái mới nhất là REALTIME_GAME_PUBLISHER — đẩy state qua
+// MQTT, xem PLAN-REALTIME.md), tất cả đều `@Injectable()` nên chỉ cần `useClass` — mỗi adapter
+// tự khai deps của nó qua constructor (`@InjectRepository(...)` cho 4 cái đầu, các service
+// NestJS chuẩn như DataSource/SchedulerRegistry/EventEmitter2/ConfigService cho 5 cái sau).
 @Module({
   imports: [TypeOrmModule.forFeature([Game, GamePlayer, GameVote, GameAction])],
   controllers: [GameController],
@@ -45,6 +48,10 @@ import { LoggerAdapter } from './infrastructure/logger.adapter';
     { provide: GAME_UNIT_OF_WORK, useClass: TypeOrmGameUnitOfWork },
     { provide: GAME_PHASE_SCHEDULER, useClass: GamePhaseSchedulerAdapter },
     { provide: GAME_EVENT_PUBLISHER, useClass: GameEventPublisherAdapter },
+    {
+      provide: REALTIME_GAME_PUBLISHER,
+      useClass: MqttRealtimeGamePublisherAdapter,
+    },
     { provide: GAME_LOGGER, useClass: LoggerAdapter },
   ],
 })
