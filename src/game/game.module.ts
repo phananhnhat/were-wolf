@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { GameController } from './game.controller';
 import { GameService } from './game.service';
 import { Game } from './infrastructure/persistence/game.orm-entity';
@@ -33,7 +34,11 @@ import { LoggerAdapter } from './infrastructure/logger.adapter';
 // tự khai deps của nó qua constructor (`@InjectRepository(...)` cho 4 cái đầu, các service
 // NestJS chuẩn như DataSource/SchedulerRegistry/EventEmitter2/ConfigService cho 5 cái sau).
 @Module({
-  imports: [TypeOrmModule.forFeature([Game, GamePlayer, GameVote, GameAction])],
+  imports: [
+    TypeOrmModule.forFeature([Game, GamePlayer, GameVote, GameAction]),
+    // Đảm bảo RealtimeModule luôn chạy trước GameModule, cần khởi tạo server MQTT Broker trước
+    RealtimeModule,
+  ],
   controllers: [GameController],
   providers: [
     GameService,

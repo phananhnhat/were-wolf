@@ -5,6 +5,10 @@ import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  // Bật lắng nghe SIGTERM/SIGINT để Nest tự gọi onModuleDestroy() (đóng TCP/WS listener của
+  // MqttBrokerService, ngắt kết nối MqttRealtimeGamePublisherAdapter...) khi process bị dừng —
+  // mặc định Nest KHÔNG tự làm việc này nếu thiếu dòng dưới.
+  app.enableShutdownHooks();
   app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
   app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
 
