@@ -42,6 +42,13 @@ lerna-debug.log*
 .env.production.local
 .env.local
 
+# EMQX (giai đoạn 2, PLAN-REALTIME.md) — 2 file này chứa JWT_ACCESS_SECRET/MQTT_AUTHZ_SECRET/
+# MQTT_INTERNAL_PASSWORD dạng plain text (EMQX's authorization http body không hỗ trợ
+# substitute biến môi trường, xem PLAN-REALTIME.md mục 8.2) — mirror cùng convention với
+# .env/.env.example. Xem emqx/emqx.conf.example, emqx/mqtt-internal-users.csv.example.
+emqx/emqx.conf
+emqx/mqtt-internal-users.csv
+
 # temp directory
 .temp
 .tmp

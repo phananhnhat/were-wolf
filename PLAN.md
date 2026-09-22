@@ -98,14 +98,21 @@ Chi tiết đã làm:
 |---|---|---|
 | Xem trạng thái ván theo phòng | `GET /games/room/:roomId` | ✅ Xong |
 | Xem thông tin của chính mình trong ván | `GET /games/:gameId/me` | ✅ Xong |
-| Bỏ phiếu / đổi phiếu | `POST /games/:gameId/vote` | ✅ Xong |
-| Xem kiểm phiếu lượt hiện tại | `GET /games/:gameId/votes` | ✅ Xong |
+| Sói bỏ phiếu cắn / đổi phiếu | `POST /games/:gameId/wolf/vote` | ✅ Xong |
+| Xem kiểm phiếu cắn (chỉ Sói) | `GET /games/:gameId/wolf/votes` | ✅ Xong |
+| Cả làng bỏ phiếu treo cổ / đổi phiếu | `POST /games/:gameId/lynch/vote` | ✅ Xong |
+| Xem kiểm phiếu treo cổ | `GET /games/:gameId/lynch/votes` | ✅ Xong |
 | Tiên tri soi 1 người trong đêm | `POST /games/:gameId/seer/check` | ✅ Xong |
 | Lịch sử soi của chính mình | `GET /games/:gameId/seer/checks` | ✅ Xong |
 | Bảo vệ che 1 người trong đêm | `POST /games/:gameId/guardian/protect` | ✅ Xong |
 | Lịch sử che của chính mình | `GET /games/:gameId/guardian/protects` | ✅ Xong |
+| Phù thuỷ đầu độc 1 người (đêm, cả ván) | `POST /games/:gameId/witch/poison` | ✅ Xong |
+| Phù thuỷ cứu nạn nhân đêm nay (pha kỹ năng, cả ván) | `POST /games/:gameId/witch/heal` | ✅ Xong |
+| Lịch sử dùng thuốc của chính mình | `GET /games/:gameId/witch/actions` | ✅ Xong |
 
-Thiết kế kỹ thuật: [docs/game-rounds.md](./docs/game-rounds.md). Luật gốc: [docs/game-rules.md](./docs/game-rules.md).
+> ⚠️ `POST /games/:gameId/vote` và `GET /games/:gameId/votes` cũ đã **xoá**, tách thành 2 cặp `wolf/...` và `lynch/...` ở trên — xem lý do ở [impl-phu-thuy.md §3.3](./docs/impl-phu-thuy.md).
+
+Thiết kế kỹ thuật: [docs/game-rounds.md](./docs/game-rounds.md) (2 pha ban đầu), [PLAN-PHU-THUY.md](./PLAN-PHU-THUY.md) + [docs/impl-phu-thuy.md](./docs/impl-phu-thuy.md) (pha kỹ năng + Phù thuỷ). Luật gốc: [docs/game-rules.md](./docs/game-rules.md).
 
 Phần dưới đây mô tả **luật vận hành của một ván**, không đi vào cách triển khai.
 
@@ -138,42 +145,59 @@ Một ván có 3 trạng thái:
 
 ### 5.2. Vai trò và phe
 
-Hiện có **4 vai**, chia ngẫu nhiên đều lúc bắt đầu và **cố định suốt ván**:
+Hiện có **5 vai**, chia ngẫu nhiên đều lúc bắt đầu và **cố định suốt ván**:
 
-| Số người | Sói | Dân thường | Bảo vệ | Tiên tri |
-|---|---|---|---|---|
-| 6 | 1 | 4 | 1 | 0 |
-| 8 | 2 | 4 | 1 | 1 |
-| 10 | 2 | 6 | 1 | 1 |
-| 15 | 3 | 10 | 1 | 1 |
+| Số người | Sói | Dân thường | Bảo vệ | Tiên tri | Phù thuỷ |
+|---|---|---|---|---|---|
+| 6 | 1 | 4 | 1 | 0 | — |
+| 8 | 2 | 4 | 1 | 1 | — |
+| 10 | 2 | 5 | 1 | 1 | 1 |
+| 15 | 3 | 9 | 1 | 1 | 1 |
 
-Hai phe: **phe Sói** và **phe Dân**. Mọi vai không phải Sói đều thuộc phe Dân. Sói biết nhau ngay từ đầu; Dân không biết ai là ai.
+Hai phe: **phe Sói** và **phe Dân**. Mọi vai không phải Sói đều thuộc phe Dân. Sói biết nhau ngay từ đầu; Dân không biết ai là ai. **Sói không được bỏ phiếu cắn đồng đội** (tự cắn mình cũng nằm trong luật này) — ban ngày thì ngược lại, cả làng treo cổ được bất kỳ ai kể cả Sói.
 
 **Tiên tri** thuộc phe Dân. Mỗi đêm được soi đúng **1 người** để biết người đó **có phải Sói hay không** — chỉ nhị phân, không biết vai cụ thể. Kết quả chỉ mình Tiên tri thấy, và **không rút lại hay đổi mục tiêu được** (khác bỏ phiếu: vừa gọi là đã biết đáp án). Không được tự soi mình, không soi người đã chết. Xem [docs/role-tien-tri.md](./docs/role-tien-tri.md).
 
-**Bảo vệ** cũng thuộc phe Dân. Mỗi đêm chọn **1 người** để che; nếu Sói cắn đúng người đó thì không ai chết. Không được tự che mình, và **không được che trùng một người 2 đêm liên tiếp**. Che chỉ chặn được vết cắn ban đêm, **không** cứu được người bị treo cổ ban ngày. Bảo vệ không bao giờ biết mình che trúng hay trượt — biết được tức là biết luôn Sói nhắm ai. Xem [docs/role-bao-ve.md](./docs/role-bao-ve.md).
+**Bảo vệ** cũng thuộc phe Dân. Mỗi đêm chọn **1 người** để che; nếu Sói cắn đúng người đó thì không ai chết. Không được tự che mình, và **không được che trùng một người 2 đêm liên tiếp**. Che chỉ chặn được vết cắn ban đêm, **không** cứu được người bị treo cổ ban ngày, **cũng không** chặn được thuốc độc của Phù thuỷ. Bảo vệ không bao giờ biết mình che trúng hay trượt — biết được tức là biết luôn Sói nhắm ai. Xem [docs/role-bao-ve.md](./docs/role-bao-ve.md).
+
+**Phù thuỷ** thuộc phe Dân, chỉ có ở mốc 10 và 15 người. Có **2 bình thuốc, mỗi bình dùng đúng 1 lần trong cả ván** (không phải mỗi đêm):
+
+- **Thuốc độc** — đầu độc 1 người bất kỳ, dùng ban đêm. Bảo vệ không chặn được.
+- **Thuốc cứu** — cứu nạn nhân bị Sói cắn đêm nay. Dùng ở một **pha riêng** mở ra sau khi Sói đã chốt xong nạn nhân (xem §5.3), để Phù thuỷ biết mình đang cứu ai. Không nhận mục tiêu tuỳ chọn — mục tiêu luôn là nạn nhân của đêm đó.
+
+Phù thuỷ không bao giờ biết thuốc cứu có phát huy tác dụng hay không (biết được là biết luôn Bảo vệ có che hay không). Xem [PLAN-PHU-THUY.md](./PLAN-PHU-THUY.md) và [docs/impl-phu-thuy.md](./docs/impl-phu-thuy.md).
 
 ### 5.3. Cấu trúc một lượt
 
-Một lượt gồm **2 pha, mỗi pha 60 giây** — tổng 120 giây. Cả hai pha đều là pha bỏ phiếu; việc bàn bạc diễn ra ngay trong 60 giây đó, không có pha thảo luận riêng.
+Một lượt cơ bản gồm **2 pha bỏ phiếu, mỗi pha 60 giây**: ban đêm rồi ban ngày. Việc bàn bạc diễn ra ngay trong 60 giây đó, không có pha thảo luận riêng.
+
+**Nếu ván có Phù thuỷ và cô ấy còn sống**, chèn thêm một **pha kỹ năng 15 giây** giữa đêm và ngày — pha này không ai bỏ phiếu, chỉ để Phù thuỷ xem nạn nhân đêm nay rồi quyết định cứu hay không:
 
 ```
-        ┌──────────── LƯỢT N (120 giây) ────────────┐
-        │                                            │
-   ───► │   BAN ĐÊM  (60s)   →    BAN NGÀY  (60s)    │ ───►  LƯỢT N+1
-        │   chỉ Sói bỏ phiếu      cả làng bỏ phiếu   │
-        │          │                     │           │
-        └──────────┼─────────────────────┼───────────┘
-                   ▼                     ▼
-            người nhiều phiếu     người nhiều phiếu
-            nhất bị cắn chết      nhất bị treo cổ
+        ┌──────────── LƯỢT N ────────────────────────────────────┐
+        │                                                         │
+   ───► │  BAN ĐÊM (60s)  →  [PHA KỸ NĂNG 15s]  →  BAN NGÀY (60s) │ ───► LƯỢT N+1
+        │  chỉ Sói bỏ phiếu   chỉ Phù thuỷ,         cả làng       │
+        │  Bảo vệ che         không ai bỏ phiếu    bỏ phiếu       │
+        │  Tiên tri soi                                           │
+        │  Phù thuỷ đầu độc                                       │
+        │       │                    │                    │       │
+        └───────┼────────────────────┼────────────────────┼───────┘
+                ▼                    ▼                    ▼
+         (chưa giết ai —      áp dụng TẤT CẢ cái      người nhiều
+          chỉ chốt nạn nhân)  chết của đêm nay         phiếu nhất
+                              (Sói cắn + thuốc độc,     bị treo cổ
+                               trừ che & thuốc cứu)
 ```
+
+**Pha kỹ năng chỉ tồn tại để phục vụ đúng một quyết định của Phù thuỷ.** Mọi kỹ năng khác (Sói cắn, Bảo vệ che, Tiên tri soi, Phù thuỷ đầu độc) đều nằm trọn trong pha ban đêm. Pha này **luôn mở nếu ván có cấu hình Phù thuỷ và cô ấy còn sống**, kể cả khi đã dùng hết cả 2 bình thuốc — ẩn pha đi lúc hết thuốc sẽ lộ luôn việc cô ấy đã cạn thuốc, nên **không được** làm vậy. Ván không có Phù thuỷ (mốc 6, 8 người) không bao giờ có pha này.
 
 **Ván luôn mở màn bằng pha ban đêm của lượt 1.**
 
-| Pha | Dài | Ai được bỏ phiếu | Ai xem được kiểm phiếu | Ý nghĩa |
+| Pha | Dài | Ai được bỏ phiếu / dùng kỹ năng | Ai xem được kiểm phiếu | Ý nghĩa |
 |---|---|---|---|---|
-| Ban đêm | 60s | Chỉ Sói còn sống | Chỉ Sói | Sói bàn kín, chọn người để cắn |
+| Ban đêm | 60s | Sói bỏ phiếu cắn; Bảo vệ che; Tiên tri soi; Phù thuỷ đầu độc | Chỉ Sói (phiếu cắn) | Bàn kín, chốt xong ai bị Sói nhắm — nhưng **chưa giết ai** |
+| Pha kỹ năng | 15s | Chỉ Phù thuỷ: xem nạn nhân rồi quyết cứu hay không | — (không ai bỏ phiếu) | Cửa sổ duy nhất để cứu; đóng pha này mới thật sự áp dụng cái chết |
 | Ban ngày | 60s | Mọi người còn sống | Mọi người trong ván | Cả làng tranh luận, chọn người treo cổ |
 
 ### 5.4. Luật bỏ phiếu
@@ -184,19 +208,23 @@ Một lượt gồm **2 pha, mỗi pha 60 giây** — tổng 120 giây. Cả hai
 - **Không được bỏ phiếu cho người đã chết.**
 - Ban đêm, người không phải Sói **không được bỏ phiếu và không được xem kiểm phiếu**.
 - Không bắt buộc phải bỏ phiếu — im lặng cũng là một lựa chọn.
-- Hiện **không cấm** tự bỏ phiếu cho chính mình, và Sói **không bị cấm** bỏ phiếu cho Sói khác (xem §8).
+- **Sói không được bỏ phiếu cắn đồng đội** (tự cắn mình cũng nằm trong luật này). Ban ngày không có giới hạn này — treo cổ được bất kỳ ai.
+- Hiện **không cấm** tự bỏ phiếu cho chính mình ở pha ban ngày.
 
 ### 5.5. Xử lý khi hết giờ một pha
 
-Hết 60 giây, hệ thống làm lần lượt:
+**Ban đêm đóng lại không giết ai ngay** — nó chỉ khoá cổng bỏ phiếu của Sói lại. Nếu ván có Phù thuỷ còn sống thì mở pha kỹ năng; nếu không thì xử lý cái chết luôn tại bước này rồi mở ban ngày.
 
-1. **Kiểm phiếu** của pha vừa đóng.
-2. **Xác định nạn nhân**: người có số phiếu cao nhất.
-   - **Hoà phiếu** (từ 2 người trở lên cùng số phiếu cao nhất) → **không ai chết**.
-   - **Không ai bỏ phiếu** → **không ai chết**.
-3. Nạn nhân (nếu có) bị **đánh dấu đã chết**, không thể hồi sinh.
-4. **Xét điều kiện thắng** (§5.6). Nếu thoả → ván kết thúc ngay tại đây, không mở pha mới.
-5. Nếu chưa ai thắng → mở pha kế tiếp. Sau pha ban ngày thì sang lượt mới.
+**Áp dụng cái chết của đêm** (khi đóng pha kỹ năng, hoặc đóng ban đêm nếu ván không có Phù thuỷ):
+
+1. **Kiểm phiếu cắn của Sói.** Người nhiều phiếu nhất là nạn nhân — hoà phiếu hoặc không ai bỏ phiếu thì không có nạn nhân.
+2. Nạn nhân **sống sót** nếu được Bảo vệ che, hoặc được Phù thuỷ cứu; ngược lại **chết**.
+3. Nếu Phù thuỷ đã dùng thuốc độc đêm đó, người bị độc **luôn chết** — Bảo vệ không chặn được, thuốc cứu không cứu được.
+4. Có thể **chết 2 người trong cùng một đêm** (một do Sói cắn, một do thuốc độc — hoặc trùng làm một nếu Phù thuỷ độc đúng người Sói cắn).
+5. **Xét điều kiện thắng** (§5.6) **một lần duy nhất**, sau khi đã áp dụng hết các cái chết. Nếu thoả → ván kết thúc ngay, không mở pha mới.
+6. Nếu chưa ai thắng → mở pha ban ngày.
+
+**Ban ngày đóng lại**: kiểm phiếu treo cổ, người nhiều phiếu nhất bị treo cổ (hoà phiếu → không ai chết), xét điều kiện thắng, rồi sang lượt mới (mở lại ban đêm). Che của Bảo vệ và thuốc của Phù thuỷ **không có tác dụng gì ở đây** — cả hai chỉ hoạt động ban đêm.
 
 ### 5.6. Điều kiện thắng
 
@@ -250,9 +278,9 @@ Nếu sau này muốn làm "bang hội / nhóm bạn bè" thì viết mới theo
 
 | Hạng mục | Ghi chú | Xác nhận |
 |---|---|---|
-| Realtime (WebSocket / SSE) | Hiện client phải poll `GET /games/room/:roomId` để biết pha đổi | Chưa cần |
+| Realtime (MQTT) | ✅ Xong — xem [PLAN-REALTIME.md](./PLAN-REALTIME.md). Đẩy state qua MQTT sau khi transaction commit, REST vẫn là nguồn sự thật (client vẫn `GET /games/room/:roomId` lúc vào ván/reconnect). Broker đổi được chỉ bằng 1 dòng provider (`AedesMqttBrokerAdapter` ↔ `EmqxMqttBrokerAdapter`, `src/realtime/realtime.module.ts`) | ✅ Xong |
 | **Nợ kỹ thuật — ván đứng khi restart** | Xem §9 bên dưới | Chấp nhận, xử lý sau |
-| Vai trò đặc biệt | Đã có Tiên tri (`seer`) và Bảo vệ (`guardian`). Còn `witch`, `hunter`, `fool` — xem [luat-choi.md §9](./docs/luat-choi.md) về thứ tự nên thêm | Đang làm dần |
+| Vai trò đặc biệt | Đã có Tiên tri (`seer`), Bảo vệ (`guardian`), Phù thuỷ (`witch`). Còn `hunter`, `fool` — xem [luat-choi.md §9](./docs/luat-choi.md) về thứ tự nên thêm | Đang làm dần |
 | Chat trong phòng | Chưa có | Chưa làm |
 | Lịch sử ván đấu / thống kê | Chưa có bảng `game_history` | Chưa làm |
 | Role admin | Chưa có cột `role`; `GET /users` đang lộ email/address của mọi người | Tạm để đó, làm sau |
@@ -359,8 +387,8 @@ Những điểm này hiện đang chạy theo mặc định "không cấm", chư
 
 | Câu hỏi | Hiện tại | Cần chốt |
 |---|---|---|
-| Được tự bỏ phiếu cho chính mình? | Được | Luật Ma Sói thường **cấm**. Nên cấm? |
-| Sói được bỏ phiếu cắn Sói khác? | Được | Vô lý về mặt luật. Nên cấm? |
+| Được tự bỏ phiếu cho chính mình? | Được (ban ngày) | Luật Ma Sói thường **cấm**. Nên cấm? |
+| Sói được bỏ phiếu cắn Sói khác? | ✅ Đã cấm (kể cả tự cắn mình) | — |
 | Có "bỏ phiếu trắng" (chủ động không treo ai) không? | Không có — chỉ có cách im lặng | Im lặng và bỏ phiếu trắng khác nhau về ý nghĩa. Có cần tách? |
 | Người đã chết có xem được kiểm phiếu không? | Sói đã chết vẫn xem được phiếu ban đêm | Chấp nhận được (chết rồi thì đã biết hết đồng đội), nhưng nên ghi rõ là luật cố ý |
 | Có được rút phiếu sau khi đã bỏ không? | Không — chỉ đổi sang người khác | Có cần cho rút hẳn? |

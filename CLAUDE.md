@@ -34,9 +34,10 @@ Required at startup (loaded via `@nestjs/config`):
 | `JWT_REFRESH_EXPIRES_IN` | Refresh token TTL (default: `7d`) |
 | `PORT` | HTTP port (default: `3000`) |
 | `MQTT_URL` | URL the backend's own MQTT publisher connects to (default: `mqtt://localhost:1883`) |
-| `MQTT_TCP_PORT` | Port the embedded Aedes broker listens on for raw TCP (mobile/native) clients (default: `1883`) |
-| `MQTT_WS_PORT` | Port the embedded Aedes broker listens on for MQTT-over-WebSocket (browser) clients (default: `8083`) |
-| `MQTT_INTERNAL_PASSWORD` | Shared secret the backend's own MQTT publisher uses to authenticate with the embedded broker (not a JWT) |
+| `MQTT_TCP_PORT` | Port the embedded broker listens on for raw TCP (mobile/native) clients — only used when `RealtimeModule` binds `AedesMqttBrokerAdapter` (default: `1883`) |
+| `MQTT_WS_PORT` | Port the embedded broker listens on for MQTT-over-WebSocket (browser) clients — only used with `AedesMqttBrokerAdapter` (default: `8083`) |
+| `MQTT_INTERNAL_PASSWORD` | Shared secret the backend's own MQTT publisher uses to authenticate with the broker (not a JWT) |
+| `MQTT_AUTHZ_SECRET` | Shared secret the `POST /internal/mqtt/authorize` webhook checks — only relevant when `RealtimeModule` binds `EmqxMqttBrokerAdapter` (EMQX calls this webhook on every SUBSCRIBE) |
 
 ## Architecture
 
@@ -70,4 +71,6 @@ Required at startup (loaded via `@nestjs/config`):
 
 ### Realtime (MQTT)
 
-`src/realtime/` hosts an **Aedes** MQTT broker embedded directly in the NestJS process (`MqttBrokerService`, `OnModuleInit`) — a temporary stand-in for a self-hosted EMQX, used while the realtime logic is being built out (see `PLAN-REALTIME.md`). Actions (vote, seer check, guardian protect, witch poison/heal) still go 100% through REST — MQTT is a **push-only** channel `GameModule`'s use cases (`start-game`, `advance-game`, `cast-wolf-vote`, `cast-lynch-vote`) publish to after a DB transaction commits, via the `RealtimeGamePublisher` port (`src/game/application/ports/realtime-game-publisher.ts`) and its `mqtt`-client adapter. Clients authenticate on CONNECT with their access token as the MQTT password; `authorizeSubscribe` only allows subscribing to `ww/room/{roomId}/...` topics for rooms the connecting user is actually a member of (checked via `RoomMembershipReader`).
+`src/realtime/` owns the MQTT broker side of realtime (see `PLAN-REALTIME.md`). Actions (vote, seer check, guardian protect, witch poison/heal) still go 100% through REST — MQTT is a **push-only** channel `GameModule`'s use cases (`start-game`, `advance-game`, `cast-wolf-vote`, `cast-lynch-vote`) publish to after a DB transaction commits, via the `RealtimeGamePublisher` port (`src/game/application/ports/realtime-game-publisher.ts`) and its `mqtt`-client adapter — this side is broker-agnostic and never changes.
+
+Which broker actually hosts the topics is swappable by changing a single provider binding in `realtime.module.ts`: both `AedesMqttBrokerAdapter` (MQTT broker embedded directly in the NestJS process) and `EmqxMqttBrokerAdapter` (broker runs externally, `docker-compose.yml` service `emqx`, config in `emqx/emqx.conf`) implement the same `MqttBroker` interface (`infrastructure/mqtt-broker.interface.ts`). Clients authenticate on CONNECT with their access token as the MQTT password. Subscribe authorization (`ww/room/{roomId}/...` only for rooms the connecting user is actually a member of, via `RoomMembershipReader`) is the same check either way — `AedesMqttBrokerAdapter` runs it as an in-process hook, `EmqxMqttBrokerAdapter` exposes it as an HTTP webhook (`POST /internal/mqtt/authorize`, `MqttAuthorizeController`) that EMQX calls on every SUBSCRIBE.
