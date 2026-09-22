@@ -1,0 +1,89 @@
+## EMQX config-as-code cho Werewolf API — giai đoạn 2 của PLAN-REALTIME.md.
+## Copy file này thành emqx/emqx.conf (gitignored) rồi thay 2 chỗ REPLACE_WITH_* bằng đúng giá
+## trị JWT_ACCESS_SECRET/MQTT_AUTHZ_SECRET trong .env của bạn. Mount read-only vào container qua
+## docker-compose.yml (service `emqx`), không cấu hình tay qua dashboard (cổng 18083 chỉ để xem
+## log/trạng thái, không dùng để cấu hình auth/ACL).
+
+node {
+  name = "emqx@127.0.0.1"
+  cookie = "werewolf-emqx-dev-cookie"
+  data_dir = "/opt/emqx/data"
+}
+
+listeners.tcp.default {
+  bind = "0.0.0.0:1883"
+}
+
+listeners.ws.default {
+  bind = "0.0.0.0:8083"
+}
+
+dashboard.listeners.http.bind = 18083
+# Chỉ dùng để debug qua Admin API (không cấu hình ACL/authn tay qua UI này) — đổi mật khẩu thật
+# nếu có lúc nào mở cổng 18083 ra ngoài mạng nội bộ.
+dashboard.default_username = "admin"
+dashboard.default_password = "werewolf-dev-admin-pw"
+
+## CONNECT — chain 2 authenticator, thử theo thứ tự:
+##   1) jwt      — client thật: username = userId của CHÍNH mình (số, dạng chuỗi), password =
+##                 access token. `verify_claims = { subStr = "${username}" }` bắt EMQX tự đối
+##                 chiếu claim "subStr" trong token đã verify chữ ký PHẢI khớp đúng username
+##                 client khai — client không mạo danh được userId khác dù username là field tự
+##                 khai, vì token hợp lệ của user khác thì "subStr" sẽ không khớp. "subStr" là
+##                 claim RIÊNG thêm vào chỉ để EMQX đọc (bản chuỗi của "sub") — "sub" thật (số)
+##                 vẫn giữ nguyên như cũ, không ai trong code TypeScript đọc "subStr" cả (xem
+##                 jwt-token-issuer.ts). Lý do cần bản chuỗi riêng: EMQX so khớp verify_claims
+##                 ĐÚNG KIỂU DỮ LIỆU, không tự ép kiểu — "sub" số sẽ KHÔNG BAO GIỜ khớp
+##                 "${username}" (luôn là chuỗi, quy định của giao thức MQTT).
+##                 Token không parse được dạng JWT (vd password của internal-publisher) thì coi
+##                 như KHÔNG áp dụng, tự rơi xuống authenticator kế tiếp, không chặn hẳn ở đây.
+##   2) built_in_database — chỉ 1 user "internal-publisher" (MqttRealtimeGamePublisherAdapter),
+##      seed lúc container khởi động qua bootstrap_file, không gọi Admin API tay.
+authentication = [
+  {
+    mechanism = jwt
+    use_jwks = false
+    from = password
+    algorithm = "hmac-based"
+    secret = "REPLACE_WITH_JWT_ACCESS_SECRET" # phải khớp JWT_ACCESS_SECRET trong .env
+    secret_base64_encoded = false
+    verify_claims {
+      subStr = "${username}"
+    }
+  },
+  {
+    mechanism = password_based
+    backend = built_in_database
+    user_id_type = username
+    bootstrap_file = "/opt/emqx/etc/mqtt-internal-users.csv"
+    bootstrap_type = plain
+  }
+]
+
+## SUBSCRIBE và PUBLISH — EMQX gọi CÙNG 1 webhook cho cả 2 hành động (khác Aedes có 2 hook
+## riêng authorizeSubscribe/authorizePublish) — MqttAuthorizeController tự phân biệt qua field
+## "action" gửi kèm. Gọi ngược vào MqttAuthorizeController (POST /internal/mqtt/authorize) đúng
+## logic authorizeSubscribe/authorizePublish của AedesMqttBrokerAdapter ở giai đoạn 1, chỉ khác
+## cơ chế gọi. host.docker.internal trỏ về máy host lúc dev (NestJS chạy ngoài Docker qua `pnpm
+## run start:dev`) — đổi thành tên service thật trong cùng docker network lúc NestJS cũng
+## containerize.
+authorization {
+  sources = [
+    {
+      type = http
+      url = "http://host.docker.internal:3000/internal/mqtt/authorize"
+      method = post
+      headers {
+        "content-type" = "application/json"
+        "x-internal-secret" = "REPLACE_WITH_MQTT_AUTHZ_SECRET" # phải khớp MQTT_AUTHZ_SECRET trong .env
+      }
+      body {
+        userId = "${username}"
+        topic = "${topic}"
+        action = "${action}"
+      }
+    }
+  ]
+  no_match = deny
+  deny_action = ignore
+}

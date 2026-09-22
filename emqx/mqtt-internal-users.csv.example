@@ -1,0 +1,2 @@
+user_id,password
+internal-publisher,REPLACE_WITH_MQTT_INTERNAL_PASSWORD

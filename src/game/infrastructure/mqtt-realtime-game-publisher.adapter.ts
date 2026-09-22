@@ -12,15 +12,11 @@ import {
 } from '../application/ports/realtime-game-publisher';
 import { GameStateView } from '../application/read-models/game-state.read-model';
 import {
+  INTERNAL_PUBLISHER_USERNAME,
   roomStateTopic,
   roomLynchVotesTopic,
   roomWolfVotesPingTopic,
 } from '../../realtime/topics';
-
-// Username cố định dùng riêng cho backend tự connect vào broker — phải khớp
-// INTERNAL_PUBLISHER_USERNAME ở realtime/infrastructure/mqtt-broker.service.ts (giai đoạn 1) /
-// credential cấu hình trong EMQX (giai đoạn 2). Xem PLAN-REALTIME.md mục 5.1.
-const INTERNAL_PUBLISHER_USERNAME = 'internal-publisher';
 
 // Gateway — implement RealtimeGamePublisher bằng `mqtt` npm client. Publish vào
 // `mqtt://localhost:1883` (Aedes, giai đoạn 1) hay `mqtt://emqx:1883` (EMQX, giai đoạn 2) đều

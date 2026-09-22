@@ -1,10 +1,4 @@
-import {
-  Inject,
-  Injectable,
-  Logger as NestLogger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable, Logger as NestLogger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as net from 'node:net';
@@ -12,11 +6,8 @@ import { WebSocketServer, createWebSocketStream } from 'ws';
 import type { Aedes as AedesInstance, AedesOptions } from 'aedes';
 import { ROOM_MEMBERSHIP_READER } from '../application/ports/room-membership-reader';
 import type { RoomMembershipReader } from '../application/ports/room-membership-reader';
-import { parseRoomIdFromTopic } from '../topics';
-
-// Username cố định dùng để MqttRealtimeGamePublisherAdapter (GameModule) tự connect vào broker
-// — KHÔNG phải end-user, không có access token thật. Xem PLAN-REALTIME.md mục 5.1.
-const INTERNAL_PUBLISHER_USERNAME = 'internal-publisher';
+import { INTERNAL_PUBLISHER_USERNAME, parseRoomIdFromTopic } from '../topics';
+import { MqttBroker } from './mqtt-broker.interface';
 
 interface AccessTokenPayload {
   sub: number; // userId — không import TokenPayload thật của AuthModule, xem PLAN-REALTIME.md:
@@ -25,17 +16,20 @@ interface AccessTokenPayload {
 
 // Gateway — Aedes (broker MQTT embedded ngay trong process NestJS, giai đoạn 1 của
 // PLAN-REALTIME.md). Mở 1 listener TCP (mobile/native) + 1 listener WebSocket (browser) trên
-// cùng 1 instance Aedes, và tự làm luôn 2 việc mà ở giai đoạn 2 (EMQX) do broker ngoài + webhook
-// HTTP đảm nhiệm:
+// cùng 1 instance Aedes, và tự làm luôn 2 việc mà ở giai đoạn 2 (EMQX,
+// EmqxMqttBrokerAdapter + MqttAuthorizeController) do broker ngoài + webhook HTTP đảm nhiệm:
 //   - authenticate  → verify access token (JWT_ACCESS_SECRET dùng chung với AuthModule)
 //   - authorizeSubscribe → chỉ cho subscribe đúng phòng mà userId đang là thành viên
 // `aedes` là gói thuần ESM (package.json "type": "module") trong khi project này compile ra
 // CommonJS — import động (`await import('aedes')`) để không vướng lỗi TS/Node khi 1 file CJS
 // `import` tĩnh 1 gói chỉ có bản ESM; các type vẫn import tĩnh bình thường (`import type`
 // không sinh ra require()/import nào lúc build nên không bị ảnh hưởng).
+//
+// `implements MqttBroker` là điểm duy nhất khiến class này "thay thế được" — đổi broker chỉ cần
+// đổi provider ở realtime.module.ts sang EmqxMqttBrokerAdapter, không đổi gì ở đây hay nơi khác.
 @Injectable()
-export class MqttBrokerService implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new NestLogger(MqttBrokerService.name);
+export class AedesMqttBrokerAdapter implements MqttBroker {
+  private readonly logger = new NestLogger(AedesMqttBrokerAdapter.name);
 
   private readonly userIdByClientId = new Map<string, number>();
   private readonly internalPublisherClientIds = new Set<string>();
@@ -74,7 +68,9 @@ export class MqttBrokerService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`MQTT (Aedes) TCP listener trên cổng ${tcpPort}`);
 
     const wsPort = Number(this.config.get('MQTT_WS_PORT') ?? 8083);
-    this.wsServer = new WebSocketServer({ port: wsPort });
+    // path: '/mqtt' — khớp đúng path EMQX's WS listener bắt buộc
+    // để client SDK dùng chung 1 URL convention ('ws://host:port/mqtt')
+    this.wsServer = new WebSocketServer({ port: wsPort, path: '/mqtt' });
     this.wsServer.on('connection', (socket, req) => {
       const stream = createWebSocketStream(socket);
       this.aedes!.handle(stream, req);
